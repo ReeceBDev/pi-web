@@ -299,6 +299,8 @@ export class AppNavigationPanel extends LitElement {
     :host([compact]) { flex: 1 1 auto; }
     header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
     header strong { flex: 0 0 auto; }
+    .header-brand { flex: 0 0 auto; display: flex; flex-direction: column; min-width: 0; }
+    .header-projects-label { color: var(--pi-muted); font-size: 11px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     machine-switcher { flex: 1 1 auto; min-width: 0; }
     :host([compact]) header { display: none; }
     .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
