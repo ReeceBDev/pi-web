@@ -173,6 +173,7 @@ export const appStyles = css`
     main.workspace-view chat-view, main.workspace-view prompt-editor, main.workspace-view status-bar,
     main.workspace-view .empty { display: none; }
     main.workspace-view { overflow: hidden; }
+    .shell > status-bar { display: none; }
   }
   @media (max-width: 760px) {
     .shell { grid-template-columns: minmax(0, 1fr); }
