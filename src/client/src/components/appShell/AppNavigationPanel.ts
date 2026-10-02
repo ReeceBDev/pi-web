@@ -183,8 +183,8 @@ export class AppNavigationPanel extends LitElement {
         .projects=${this.projects}
         .selected=${this.selectedProject}
         .statusSnapshot=${this.selectedMachineStatusSnapshot()}
-        .collapsible=${this.collapsible}
-        .collapsed=${this.projectsCollapsed}
+        .collapsible=${false}
+        .collapsed=${false}
         .onToggleCollapsed=${this.childCallbacks.toggleProjects}
         .onSelect=${this.childCallbacks.selectProject}
         .onClose=${this.childCallbacks.closeProject}
