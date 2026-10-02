@@ -1,4 +1,4 @@
-import { LitElement, html, type PropertyValues } from "lit";
+import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { Project } from "../api";
 import type { MachineStatusSnapshot } from "../../../shared/machineStatus";
@@ -120,5 +120,7 @@ export class ProjectList extends LitElement implements KeyboardNavigableSection 
     if (confirm(`Close ${project.name}?\n\nThis only removes it from PI WEB; it will not change the project folder.`)) this.onClose?.(project);
   }
 
-  static override styles = listStyles;
+  // rbowen (wsfix3): no section banner at all — the Projects label lives in the
+  // navigation-panel header, next to the PI WEB brand.
+  static override styles = [listStyles, css`h2 { display: none; }`];
 }
