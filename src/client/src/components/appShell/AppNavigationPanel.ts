@@ -172,6 +172,7 @@ export class AppNavigationPanel extends LitElement {
         ></machine-list>
       ` : null}
       <project-list
+        style=${`flex-grow:${String(this.projectsFlex)}`}
         .projects=${this.projects}
         .selected=${this.selectedProject}
         .statusSnapshot=${this.selectedMachineStatusSnapshot()}
