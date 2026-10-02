@@ -227,8 +227,8 @@ describe("ChatView notification tray wiring", () => {
 
     templateEventHandlerAfterMarker(rendered, "notification-toggle")(new Event("click"));
 
-    const collapsedTargetKeys: unknown = Reflect.get(view, "collapsedNotificationTargetKeys");
-    if (!(collapsedTargetKeys instanceof Set)) throw new Error("Expected collapsed notification target keys");
+    const expandedTargetKeys: unknown = Reflect.get(view, "collapsedNotificationTargetKeys");
+    if (!(expandedTargetKeys instanceof Set)) throw new Error("Expected expanded notification target keys");
     const firstNotification = inbox.notifications[0];
     if (firstNotification === undefined) throw new Error("expected a retained notification");
     const newArrival = {
@@ -236,10 +236,14 @@ describe("ChatView notification tray wiring", () => {
       notifications: [{ ...firstNotification, id: "daemon-a:2", order: 2 }, ...inbox.notifications],
       retainedCount: 2,
     };
-    expect(notificationTrayIsCollapsed(collapsedTargetKeys, newArrival)).toBe(true);
-    expect(notificationTrayIsCollapsed(collapsedTargetKeys, { ...newArrival, cwd: "/other" })).toBe(false);
-    expect(notificationTrayIsCollapsed(collapsedTargetKeys, { ...newArrival, machineId: "remote" })).toBe(false);
-    expect(collapsedTargetKeys.has(notificationTargetKey(inbox))).toBe(true);
+    // rbowen (wsfix4, step 1 of 2): the Set now holds expanded keys, so an
+    // absent key means collapsed — new arrivals stay collapsed, and only the
+    // exact chat that was expanded (after step 2 flips the toggle call site)
+    // can be open. These assertions match the intermediate state.
+    expect(notificationTrayIsCollapsed(expandedTargetKeys, newArrival)).toBe(true);
+    expect(notificationTrayIsCollapsed(expandedTargetKeys, { ...newArrival, cwd: "/other" })).toBe(true);
+    expect(notificationTrayIsCollapsed(expandedTargetKeys, { ...newArrival, machineId: "remote" })).toBe(true);
+    expect(expandedTargetKeys.has(notificationTargetKey(inbox))).toBe(false);
   });
 });
 

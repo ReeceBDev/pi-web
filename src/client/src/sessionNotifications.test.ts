@@ -159,15 +159,19 @@ describe("notification presentation helpers", () => {
     expect(notificationFocusTargetAfterDismiss([notification(1)], "daemon-a:1")).toEqual({ kind: "header" });
   });
 
-  it("retains collapse state by exact machine, cwd, and session identity", () => {
-    const collapsed = setNotificationTrayCollapsed(new Set(), target, true);
+  it("keeps the tray collapsed by default and expands only the exact chat", () => {
+    // rbowen (wsfix4): the Set holds expanded keys, so an empty Set means
+    // collapsed-by-default. With the set repurposed, setNotificationTrayCollapsed's
+    // boolean now targets expansion: pass true to expand (add the key).
+    expect(notificationTrayIsCollapsed(new Set(), target)).toBe(true);
+    const expanded = setNotificationTrayCollapsed(new Set(), target, true);
 
-    expect(notificationTrayIsCollapsed(collapsed, target)).toBe(true);
-    expect(notificationTrayIsCollapsed(collapsed, { ...target, machineId: "remote" })).toBe(false);
-    expect(notificationTrayIsCollapsed(collapsed, { ...target, cwd: "/other" })).toBe(false);
-    expect(notificationTrayIsCollapsed(collapsed, { ...target, sessionId: "session-2" })).toBe(false);
+    expect(notificationTrayIsCollapsed(expanded, target)).toBe(false);
+    expect(notificationTrayIsCollapsed(expanded, { ...target, machineId: "remote" })).toBe(true);
+    expect(notificationTrayIsCollapsed(expanded, { ...target, cwd: "/other" })).toBe(true);
+    expect(notificationTrayIsCollapsed(expanded, { ...target, sessionId: "session-2" })).toBe(true);
     expect(notificationTargetKey(target)).not.toBe(notificationTargetKey({ ...target, cwd: "/repo|session-1" }));
-    expect(notificationTrayIsCollapsed(setNotificationTrayCollapsed(collapsed, target, false), target)).toBe(false);
+    expect(notificationTrayIsCollapsed(setNotificationTrayCollapsed(expanded, target, false), target)).toBe(true);
   });
 
   it("derives compact tray copy and a count that includes older unseen notifications", () => {

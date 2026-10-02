@@ -235,9 +235,10 @@ export function notificationTargetKey(target: SessionNotificationTarget): string
 }
 
 export function notificationTrayIsCollapsed(collapsedTargetKeys: ReadonlySet<string>, target: SessionNotificationTarget): boolean {
-  return collapsedTargetKeys.has(notificationTargetKey(target));
+  // rbowen (wsfix4): the Set is repurposed from "collapsed keys" to "expanded
+  // keys", so an empty Set means collapsed-by-default.
+  return !collapsedTargetKeys.has(notificationTargetKey(target));
 }
-
 export function setNotificationTrayCollapsed(collapsedTargetKeys: ReadonlySet<string>, target: SessionNotificationTarget, collapsed: boolean): ReadonlySet<string> {
   const next = new Set(collapsedTargetKeys);
   const key = notificationTargetKey(target);
