@@ -49,7 +49,7 @@ export class AppNavigationPanel extends LitElement {
   // rbowen (wstoggle): Workspaces section visibility and the Projects/Sessions
   // split, persisted in localStorage; wired up in the constructor below.
   @property({ attribute: false }) workspacesHidden = false;
-  projectsHidden = false;
+  @property({ attribute: false }) projectsHidden = false;
   @property({ attribute: false }) projectsFlex = 50;
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
