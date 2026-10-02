@@ -384,7 +384,16 @@ function applyContiguousEvent(
   const summariesByIdentity = new Map(projection.summariesByIdentity);
   const key = sessionIdentityKey(event);
   if (event.unread === null) summariesByIdentity.delete(key);
-  else summariesByIdentity.set(key, { ...event.unread });
+  else {
+    // rbowen (ding): dispatch pw-unread-ding when a session turns unread or
+    // re-completes (its completion order changed); the notify-sounds plugin
+    // listens for this and plays the notification sound.
+    const previous = summariesByIdentity.get(key);
+    if (previous?.completionOrder !== event.unread.completionOrder && typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+      window.dispatchEvent(new Event("pw-unread-ding"));
+    }
+    summariesByIdentity.set(key, { ...event.unread });
+  }
   const nextStatus: SessionUnreadProjectionStatus = status === "stale" ? "stale" : "fresh";
   return {
     projection: {
