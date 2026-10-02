@@ -335,6 +335,7 @@ export const chatStyles = css`
   .notification-tray.collapsed .notification-header { border-bottom: 0; }
   .notification-header:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: -3px; }
   .notification-heading { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--pi-text-bright); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+  .notification-tray .notification-heading::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pi-danger, #e5484d); margin-right: 6px; vertical-align: 1px; }
   .notification-header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; }
   .notification-control, .notification-row-dismiss { box-sizing: border-box; min-height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--pi-muted); cursor: pointer; }
   .notification-control { padding: 0 7px; font: 12px system-ui, sans-serif; white-space: nowrap; }
