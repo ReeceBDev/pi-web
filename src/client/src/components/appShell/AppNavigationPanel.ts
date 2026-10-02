@@ -194,8 +194,8 @@ export class AppNavigationPanel extends LitElement {
         .machineId=${this.selectedMachine?.id ?? "local"}
         .statusSnapshot=${this.selectedMachineStatusSnapshot()}
         .deletingWorkspaceIds=${this.deletingWorkspaceIds}
-        .collapsible=${this.collapsible}
-        .collapsed=${this.workspacesCollapsed}
+        .collapsible=${false}
+        .collapsed=${false}
         .workspaceLabelItems=${this.workspaceLabelItems}
         .onToggleCollapsed=${this.childCallbacks.toggleWorkspaces}
         .onSelect=${this.childCallbacks.selectWorkspace}
