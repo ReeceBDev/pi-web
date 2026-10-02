@@ -205,7 +205,7 @@ export class AppNavigationPanel extends LitElement {
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></workspace-list>
       <session-list
-        style=${`flex-grow:${String(this.workspacesHidden ? 100 - this.projectsFlex : 2 * Math.round((100 - this.projectsFlex) / 3))}`}
+        style=${`flex-grow:${String(this.workspacesHidden && !this.compact ? 100 - this.projectsFlex : 2 * Math.round((100 - this.projectsFlex) / 3))}`}
         .sessions=${this.sessions}
         .statuses=${this.sessionStatuses}
         .activities=${this.sessionActivities}
