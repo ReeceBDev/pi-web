@@ -49,6 +49,7 @@ export class AppNavigationPanel extends LitElement {
   // rbowen (wstoggle): Workspaces section visibility and the Projects/Sessions
   // split, persisted in localStorage; wired up in the constructor below.
   @property({ attribute: false }) workspacesHidden = false;
+  projectsHidden = false;
   @property({ attribute: false }) projectsFlex = 50;
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
@@ -88,6 +89,7 @@ export class AppNavigationPanel extends LitElement {
   constructor() {
     super();
     this.workspacesHidden = localStorage.getItem("pi-web.workspacesHidden") !== "0";
+    this.projectsHidden = localStorage.getItem("pi-web.projectsHidden") === "1";
     const flex = Number(localStorage.getItem("pi-web.projectsFlex"));
     this.projectsFlex = flex >= 5 && flex <= 95 ? flex : 50;
   }
