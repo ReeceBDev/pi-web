@@ -236,14 +236,13 @@ describe("ChatView notification tray wiring", () => {
       notifications: [{ ...firstNotification, id: "daemon-a:2", order: 2 }, ...inbox.notifications],
       retainedCount: 2,
     };
-    // rbowen (wsfix4, step 1 of 2): the Set now holds expanded keys, so an
-    // absent key means collapsed — new arrivals stay collapsed, and only the
-    // exact chat that was expanded (after step 2 flips the toggle call site)
-    // can be open. These assertions match the intermediate state.
-    expect(notificationTrayIsCollapsed(expandedTargetKeys, newArrival)).toBe(true);
+    // rbowen (wsfix4, final): the Set holds expanded keys. The toggle click
+    // expanded the exact chat (key added); new arrivals in that chat stay
+    // expanded, every other chat stays collapsed.
+    expect(notificationTrayIsCollapsed(expandedTargetKeys, newArrival)).toBe(false);
     expect(notificationTrayIsCollapsed(expandedTargetKeys, { ...newArrival, cwd: "/other" })).toBe(true);
     expect(notificationTrayIsCollapsed(expandedTargetKeys, { ...newArrival, machineId: "remote" })).toBe(true);
-    expect(expandedTargetKeys.has(notificationTargetKey(inbox))).toBe(false);
+    expect(expandedTargetKeys.has(notificationTargetKey(inbox))).toBe(true);
   });
 });
 

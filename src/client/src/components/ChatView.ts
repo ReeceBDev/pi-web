@@ -560,7 +560,10 @@ export class ChatView extends LitElement {
   }
 
   private toggleNotificationTray(inbox: SelectedSessionNotificationView, collapsed: boolean): void {
-    this.collapsedNotificationTargetKeys = setNotificationTrayCollapsed(this.collapsedNotificationTargetKeys, inbox, !collapsed);
+    // rbowen (wsfix4): with the Set repurposed to expanded-keys, the toggle
+    // passes the current collapsed flag directly (expanded → remove key,
+    // collapsed → add key).
+    this.collapsedNotificationTargetKeys = setNotificationTrayCollapsed(this.collapsedNotificationTargetKeys, inbox, collapsed);
   }
 
   private dismissNotification(notificationId: string): void {
