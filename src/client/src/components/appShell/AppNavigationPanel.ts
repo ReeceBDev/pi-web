@@ -87,7 +87,7 @@ export class AppNavigationPanel extends LitElement {
 
   constructor() {
     super();
-    this.workspacesHidden = localStorage.getItem("pi-web.workspacesHidden") === "1";
+    this.workspacesHidden = localStorage.getItem("pi-web.workspacesHidden") !== "0";
     const flex = Number(localStorage.getItem("pi-web.projectsFlex"));
     this.projectsFlex = flex >= 5 && flex <= 95 ? flex : 50;
   }
