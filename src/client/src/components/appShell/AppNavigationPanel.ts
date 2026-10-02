@@ -46,6 +46,10 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Boolean }) sessionsCollapsed = false;
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
+  // rbowen (wstoggle): Workspaces section visibility and the Projects/Sessions
+  // split, persisted in localStorage; wired up in the constructor below.
+  workspacesHidden = false;
+  projectsFlex = 50;
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
@@ -80,6 +84,13 @@ export class AppNavigationPanel extends LitElement {
   @query("project-list") private projectList?: KeyboardNavigableSection;
   @query("workspace-list") private workspaceList?: KeyboardNavigableSection;
   @query("session-list") private sessionList?: KeyboardNavigableSection;
+
+  constructor() {
+    super();
+    this.workspacesHidden = localStorage.getItem("pi-web.workspacesHidden") === "1";
+    const flex = Number(localStorage.getItem("pi-web.projectsFlex"));
+    this.projectsFlex = flex >= 5 && flex <= 95 ? flex : 50;
+  }
 
   async focusSection(section: NavigationSection): Promise<boolean> {
     await this.updateComplete;
