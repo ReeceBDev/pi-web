@@ -13,15 +13,9 @@ import type { AskUserSubmission, PendingAskUser, PendingExtensionDialog, QueuedS
 import type { ClosedExtensionDialog } from "../appState";
 import {
   notificationAnnouncementLabel,
-  notificationDismissLabel,
   notificationFocusTargetAfterDismiss,
-  notificationInboxOverflowLabel,
   notificationInboxTotalCount,
-  notificationMessageTruncationLabel,
-  notificationSeverityLabel,
   notificationTargetKey,
-  notificationTrayHeading,
-  notificationTrayIsCollapsed,
   setNotificationTrayCollapsed,
   type NotificationFocusTarget,
   type SelectedSessionNotificationView,
@@ -42,24 +36,6 @@ import type { ImageOpenDetail } from "./ImagePresentation";
 import { ImageLayoutScrollController } from "./ImageLayoutScrollController";
 
 const messageTimestampFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
-const notificationTimestampFormatter = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
-
-function renderNotificationDisclosureIcon(collapsed: boolean) {
-  return html`
-    <svg class=${`notification-icon notification-disclosure-icon${collapsed ? "" : " expanded"}`} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="m9 18 6-6-6-6"></path>
-    </svg>
-  `;
-}
-
-function renderNotificationCloseIcon() {
-  return html`
-    <svg class="notification-icon notification-close-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M6 6l12 12"></path>
-      <path d="M18 6 6 18"></path>
-    </svg>
-  `;
-}
 
 function isSessionNotificationTarget(value: unknown): value is SessionNotificationTarget {
   return typeof value === "object"
@@ -477,76 +453,11 @@ export class ChatView extends LitElement {
   }
 
   private renderTopNotices() {
+    // rbowen (wsfix6): the notification tray is gone; .top-notices keeps its
+    // wrapper/styling and now only ever holds warnings.
     const warnings = this.renderWarnings();
-    const notifications = this.renderNotificationTray();
-    if (warnings === null && notifications === null) return null;
-    return html`<div class="top-notices">${warnings}${notifications}</div>`;
-  }
-
-  private renderNotificationTray() {
-    const inbox = this.notificationInbox;
-    if (inbox?.sessionId !== this.sessionId) return null;
-    const chatKey = notificationTargetKey(inbox);
-    const hasPendingOverlay = inbox.pendingDismissedIds.size > 0 || inbox.dismissAllPending;
-    const retainsFocusTarget = this.retainedEmptyNotificationTrayTargetKey === chatKey;
-    const totalCount = notificationInboxTotalCount(inbox);
-    if (totalCount === 0 && !hasPendingOverlay && !retainsFocusTarget) return null;
-    const collapsed = notificationTrayIsCollapsed(this.collapsedNotificationTargetKeys, inbox);
-    const toggleLabel = collapsed ? "Expand notifications" : "Collapse notifications";
-    return html`
-      <section class=${`notification-tray${collapsed ? " collapsed" : ""}`} role="region" aria-labelledby="session-notifications-heading" @focusout=${(event: FocusEvent) => { this.releaseEmptyNotificationTray(event); }}>
-        <header class="notification-header" data-notification-focus="header" tabindex="-1">
-          <strong class="notification-heading" id="session-notifications-heading">${notificationTrayHeading(inbox)}</strong>
-          <div class="notification-header-actions">
-            <button
-              type="button"
-              class="notification-control notification-clear"
-              aria-label="Clear all notifications"
-              title="Clear all notifications"
-              ?disabled=${inbox.dismissAllPending || totalCount === 0 || this.onDismissAllNotifications === undefined}
-              @click=${() => { this.dismissAllNotifications(); }}
-            >Clear</button>
-            <button
-              type="button"
-              class="notification-control notification-toggle"
-              aria-label=${toggleLabel}
-              title=${toggleLabel}
-              aria-expanded=${String(!collapsed)}
-              aria-controls="session-notification-list"
-              @click=${() => { this.toggleNotificationTray(inbox, collapsed); }}
-            >${renderNotificationDisclosureIcon(collapsed)}</button>
-          </div>
-        </header>
-        <div class="notification-list" id="session-notification-list" ?hidden=${collapsed}>
-          ${inbox.discardedCount === 0 ? null : html`
-            <p class="notification-overflow">${notificationInboxOverflowLabel(inbox.discardedCount)}</p>
-          `}
-          ${inbox.notifications.map((notification) => {
-            const label = notificationSeverityLabel(notification.severity);
-            const truncationLabel = notificationMessageTruncationLabel(notification);
-            return html`
-              <article class=${`notification-row ${notification.severity}`} data-notification-id=${notification.id} tabindex="-1">
-                <div class="notification-metadata">
-                  <strong class="notification-severity">${label}</strong>
-                  <span aria-hidden="true">·</span>
-                  <time datetime=${notification.receivedAt}>${notificationTimestampFormatter.format(new Date(notification.receivedAt))}</time>
-                </div>
-                <p class="notification-message" dir="auto">${notification.message}</p>
-                ${truncationLabel === undefined ? null : html`<p class="notification-truncated">${truncationLabel}</p>`}
-                <button
-                  type="button"
-                  class="notification-row-dismiss"
-                  aria-label=${notificationDismissLabel(notification)}
-                  title="Dismiss notification"
-                  ?disabled=${inbox.pendingDismissedIds.has(notification.id) || inbox.dismissAllPending || this.onDismissNotification === undefined}
-                  @click=${() => { this.dismissNotification(notification.id); }}
-                >${renderNotificationCloseIcon()}</button>
-              </article>
-            `;
-          })}
-        </div>
-      </section>
-    `;
+    if (warnings === null) return null;
+    return html`<div class="top-notices">${warnings}</div>`;
   }
 
   private renderNotificationLiveRegions() {
