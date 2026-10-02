@@ -147,7 +147,10 @@ export const appStyles = css`
   .shell.navigation-panel-collapsed .navigation-panel-edge-button { transform: translateX(calc(50% - .5px)); }
   .shell.workspace-panel-collapsed .workspace-panel-edge-button { transform: translateX(calc(-50% + .5px)); }
   .navigation-panel-edge-icon, .workspace-panel-edge-icon { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-  workspace-panel { grid-column: 5; min-width: 0; min-height: 0; overflow: hidden; }
+  workspace-panel { grid-column: 5; grid-row: 1; min-width: 0; min-height: 0; overflow: hidden; }
+  /* rbowen (wsfix6): the status-bar pill OVERLAYS the bottom of the workspace
+     panel (same row, aligned end) so it never shrinks the panel or the chat. */
+  .shell > status-bar { grid-column: 5; grid-row: 1; align-self: end; justify-self: end; z-index: 5; max-width: 100%; }
   @media (min-width: 1181px) {
     .shell.navigation-panel-collapsed { --navigation-panel-width: 0px; }
     .shell.navigation-panel-collapsed > aside { display: none; }
