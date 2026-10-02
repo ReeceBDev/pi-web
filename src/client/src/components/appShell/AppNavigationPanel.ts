@@ -140,7 +140,10 @@ export class AppNavigationPanel extends LitElement {
   override render() {
     return html`
       <header>
-        <strong>PI WEB</strong>
+        <div class="header-brand">
+          <strong>PI WEB</strong>
+          <small class="header-projects-label">Projects · ${this.projects.length}</small>
+        </div>
         <machine-switcher
           .machines=${this.machines}
           .selected=${this.selectedMachine}
