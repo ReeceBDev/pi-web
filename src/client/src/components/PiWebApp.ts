@@ -3540,6 +3540,7 @@ export class PiWebApp extends LitElement {
         </main>
         ${this.renderWorkspacePanelEdgeControl()}
         ${guard(this.workspaceSurfaceInputs(), () => this.renderWorkspacePanel())}
+        ${state.selectedSession ? this.renderStatusBar(state) : null}
         ${state.authDialog !== undefined ? html`<auth-dialog .state=${state.authDialog} .onChooseMethod=${(authType: "oauth" | "api_key") => { void this.auth.chooseLoginMethod(authType); }} .onSelectProvider=${(providerId: string, authType: "oauth" | "api_key") => { void this.auth.selectLoginProvider(providerId, authType); }} .onLogoutProvider=${(providerId: string) => { void this.auth.logoutProvider(providerId); }} .onOAuthInput=${(value: string) => { this.auth.updateOAuthInput(value); }} .onOAuthRespond=${(value?: string) => { void this.auth.respondOAuth(value); }} .onOAuthCancel=${() => { void this.auth.cancelOAuth(); }} .onCancel=${() => { this.auth.closeDialog(); }}></auth-dialog>` : null}
         ${this.navigationDialogOpen ? html`<navigation-dialog
           .tabs=${this.availableNavigationTabs()}
