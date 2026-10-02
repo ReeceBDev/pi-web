@@ -187,6 +187,8 @@ export class AppNavigationPanel extends LitElement {
       ></project-list>
       <div class="section-resizer" title="Drag to resize Projects vs Sessions" @pointerdown=${(event: PointerEvent) => { this.startSectionResize(event); }}></div>
       <workspace-list
+        ?hidden=${this.workspacesHidden}
+        style=${`flex-grow:${String(Math.max(1, Math.round((100 - this.projectsFlex) / 3)))}`}
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
         .machineId=${this.selectedMachine?.id ?? "local"}
