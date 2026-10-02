@@ -235,6 +235,7 @@ export const workspacePanelStyles = css`
 
 export const listStyles = css`
   :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; color: var(--pi-text); font: 14px system-ui, sans-serif; }
+  :host([hidden]) { display: none !important; }
   :host([collapsed]) { flex: 0 0 auto; min-height: auto; overflow: hidden; }
   section { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 10px; }
   h2 { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
