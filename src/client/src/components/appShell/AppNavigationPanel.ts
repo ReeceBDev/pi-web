@@ -157,6 +157,7 @@ export class AppNavigationPanel extends LitElement {
         ></machine-switcher>
         <div class="header-actions">
           ${this.refreshControl}
+          <button title=${this.projectsHidden ? "Show the Projects section" : "Hide the Projects section"} aria-pressed=${String(!this.projectsHidden)} @click=${() => { this.projectsHidden = !this.projectsHidden; localStorage.setItem("pi-web.projectsHidden", this.projectsHidden ? "1" : "0"); }}>Projects</button>
           <button title=${this.workspacesHidden ? "Show the Workspaces section" : "Hide the Workspaces section"} aria-pressed=${String(!this.workspacesHidden)} @click=${() => { this.workspacesHidden = !this.workspacesHidden; localStorage.setItem("pi-web.workspacesHidden", this.workspacesHidden ? "1" : "0"); }}>Workspaces</button>
           <button title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>Actions</button>
         </div>
