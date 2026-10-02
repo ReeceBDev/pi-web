@@ -48,8 +48,8 @@ export class AppNavigationPanel extends LitElement {
   @property({ type: Boolean }) canStartSession = false;
   // rbowen (wstoggle): Workspaces section visibility and the Projects/Sessions
   // split, persisted in localStorage; wired up in the constructor below.
-  workspacesHidden = false;
-  projectsFlex = 50;
+  @property({ attribute: false }) workspacesHidden = false;
+  @property({ attribute: false }) projectsFlex = 50;
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
