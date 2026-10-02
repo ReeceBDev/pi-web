@@ -185,6 +185,7 @@ export class AppNavigationPanel extends LitElement {
         .onFocusNextSection=${this.childCallbacks.nextFromProjects}
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></project-list>
+      <div class="section-resizer" title="Drag to resize Projects vs Sessions" @pointerdown=${(event: PointerEvent) => { this.startSectionResize(event); }}></div>
       <workspace-list
         .workspaces=${this.workspaces}
         .selected=${this.selectedWorkspace}
@@ -233,6 +234,25 @@ export class AppNavigationPanel extends LitElement {
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></session-list>
     `;
+  }
+
+  /** rbowen (wstoggle): drag handle between Projects and Sessions; 5–95% clamp, persisted. */
+  private startSectionResize(event: PointerEvent): void {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startFlex = this.projectsFlex;
+    const height = this.clientHeight || 1;
+    const onMove = (move: PointerEvent) => {
+      const flex = startFlex + ((move.clientY - startY) / height) * 100;
+      this.projectsFlex = Math.round(Math.min(95, Math.max(5, flex)));
+      localStorage.setItem("pi-web.projectsFlex", String(this.projectsFlex));
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   }
 
   /**
