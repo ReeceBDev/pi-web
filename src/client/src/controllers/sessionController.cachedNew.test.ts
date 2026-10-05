@@ -4,7 +4,7 @@ import { isCachedNewSessionInfo, loadCachedNewSessions, markCachedNewSessionInfo
 import { loadDraft, saveDraft } from "../promptDraftStorage";
 import { clearStagedAttachments, loadStagedAttachments, saveStagedAttachments, type PendingAttachment } from "../promptAttachmentStaging";
 import { SessionController } from "./sessionController";
-import { defaultApi, emptyPage, FakeSocket, MemoryStorage, oldSession, replacementSession, sessionKey, sessionLookupId, status, workspace, type AppState } from "./sessionController.testSupport";
+import { defaultApi, deferred, emptyPage, FakeSocket, MemoryStorage, oldSession, replacementSession, sessionKey, sessionLookupId, status, workspace, type AppState, type SessionInfo } from "./sessionController.testSupport";
 
 describe("SessionController cached-new sessions", () => {
   it("keeps live message count updates when a cached new session becomes persisted", async () => {
@@ -241,5 +241,44 @@ describe("SessionController cached-new sessions", () => {
 
     expect(state.commandDialog).toBeUndefined();
     expect(loadDraft(sessionKey(replacementSession.id))).toBe("fork me");
+  });
+
+  it("keeps the cached-new session when a refresh lands after the workspace changed", async () => {
+    // Regression: mergeCachedNewSessions drops storage entries contained in the
+    // fetched listing. If that side effect ran before the machine/workspace
+    // guards discarded the fetched list, a stale catalog snapshot reused on
+    // return lost the new session entirely (it disappears from the workspace).
+    const storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
+    const otherWorkspace = { ...workspace, id: "workspace-2", path: "/other" };
+    const started: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
+    const fetchedGate = deferred<SessionInfo[]>();
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: (cwd) => (cwd === workspace.path ? fetchedGate.promise : Promise.resolve([])),
+      startSession: () => Promise.resolve(started),
+      transcriptSnapshot: (session) => Promise.resolve({ page: emptyPage, status: status(sessionLookupId(session)), seq: 0, partial: null }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    await controller.startSession();
+    expect(loadCachedNewSessions(storage).map((session) => session.id)).toEqual(["started-session"]);
+
+    // The session gained a message, so the server now lists it. The refresh
+    // starts, then the user switches workspace before the response lands.
+    const refreshing = controller.refreshCurrentWorkspaceSessions();
+    state = { ...state, selectedWorkspace: otherWorkspace };
+    fetchedGate.resolve([{ ...oldSession }, { ...started, messageCount: 1, firstMessage: "hi" }]);
+    await refreshing;
+
+    // The guard discarded the fetched list, so the storage entry must survive.
+    expect(loadCachedNewSessions(storage).map((session) => session.id)).toEqual(["started-session"]);
   });
 });

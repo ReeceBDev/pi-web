@@ -869,9 +869,13 @@ export class SessionController {
     if (workspace === undefined) return;
     try {
       const fetchedSessions = await this.api.sessions(workspace.path, machineId);
+      // The merge below rewrites the cached-new-session storage, so it must run
+      // only when its result will actually be applied: dropping storage entries
+      // and then discarding the fetched list would lose not-yet-persisted
+      // sessions once the stale catalog snapshot is reused without a refetch.
+      if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
       const listedSessions = mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
         .filter((session) => !this.isSuppressedCreatedSession(session, machineId));
-      if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
       const selectedSession = this.getState().selectedSession;
       this.setState({

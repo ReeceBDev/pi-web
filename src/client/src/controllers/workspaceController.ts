@@ -118,12 +118,15 @@ export class WorkspaceController {
         ?? (target?.signal === undefined
           ? await this.api.sessions(workspace.path, machineId)
           : await this.api.sessions(workspace.path, machineId, { signal: target.signal }));
-      const sessions = mergeCachedNewSessions(workspace.path, loadedSessions, machineId);
+      // mergeCachedNewSessions rewrites the cached-new-session storage; like the
+      // fetch above, its effect must only survive alongside the state write that
+      // the guards below authorize. Run it after them.
       if (!this.navigationIsCurrent(navigation)
         || !workspaceMutationIsCurrent(target)
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedWorkspace?.id !== workspace.id
         || this.getState().selectedProject?.id !== workspace.projectId) return;
+      const sessions = mergeCachedNewSessions(workspace.path, loadedSessions, machineId);
       this.setState({
         sessions,
         // A fresh listing is newer than the catalog snapshot; write it back so
