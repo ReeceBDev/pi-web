@@ -1147,6 +1147,14 @@ export interface PiSessionServiceDependencies {
 
 export class PiSessionService implements SessionRouteService {
   private readonly active = new Map<string, ActiveSession<PiSessionRuntime>>();
+  /**
+   * Creation time of runtimes observed by this service. The engine writes a
+   * session transcript file only on the first message, so a freshly created,
+   * not-yet-typed-into session has no file and would otherwise be invisible to
+   * every file-based listing (workspace sessions, project catalog) while the
+   * user is still typing in it.
+   */
+  private readonly activeSessionCreatedAt = new WeakMap<PiSessionRuntime, Date>();
   private readonly sessionEvents: PiSessionEventConnections;
   private readonly pendingSessionOpens = new Map<string, PendingSessionOpen>();
   /**
@@ -1474,6 +1482,7 @@ export class PiSessionService implements SessionRouteService {
       this.publishNotificationMutations(this.notificationStore.clearSession(record.sessionId, "archive-reconcile"));
     }
     const unarchivedSessions = sessions.filter((session) => !archivedById.has(session.id)).map(clientSessionFromListEntry);
+    const unpersistedActive = this.unpersistedActiveSessions(cwd);
     const reconcilableSessionIds = this.reconcilableSessionIds(cwd, unarchivedSessions.map((session) => session.id), archivedById);
     this.workspaceActivity?.reconcileSessionActivity(cwd, reconcilableSessionIds);
     await this.publishUnreadMutations(this.unreadStore.reconcileCwd(canonicalizeStoredCwd(cwd), reconcilableSessionIds));
@@ -1481,7 +1490,36 @@ export class PiSessionService implements SessionRouteService {
       .map((record) => clientSessionFromArchivedRecord(record, sessionsById.get(record.sessionId)))
       .filter(isDefined)
       .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified));
-    return [...unarchivedSessions, ...archivedSessions];
+    return [...unarchivedSessions, ...unpersistedActive, ...archivedSessions];
+  }
+
+  /**
+   * Listing entries for active runtimes the engine has not persisted yet (no
+   * transcript file before the first message, so no file-scan entry exists).
+   * Without these, a just-created session the user has not submitted to
+   * vanishes from every server listing while it is being typed into.
+   */
+  private unpersistedActiveSessions(cwd: string): ClientSession[] {
+    const canonicalCwd = canonicalizeStoredCwd(cwd);
+    const entries: ClientSession[] = [];
+    for (const active of new Set(this.active.values())) {
+      const session = active.runtime.session;
+      if (session.sessionFile !== undefined) continue;
+      if (canonicalizeStoredCwd(active.runtime.cwd) !== canonicalCwd) continue;
+      const created = (this.activeSessionCreatedAt.get(active.runtime) ?? this.now()).toISOString();
+      entries.push({
+        id: session.sessionId,
+        path: "",
+        cwd: canonicalCwd,
+        persisted: false,
+        ...(session.sessionName === undefined ? {} : { name: session.sessionName }),
+        created,
+        modified: created,
+        messageCount: 0,
+        firstMessage: "",
+      });
+    }
+    return entries;
   }
 
   async start(cwd: string, options: StartSessionOptions = {}): Promise<ClientSession> {
@@ -3782,6 +3820,7 @@ export class PiSessionService implements SessionRouteService {
       ...(options.initialThinkingLevel === undefined ? {} : { initialThinkingLevel: options.initialThinkingLevel }),
     });
     const active: ActiveSession<PiSessionRuntime> = { runtime, unsubscribe: noop };
+    this.activeSessionCreatedAt.set(runtime, this.now());
     let boundSession = runtime.session;
     const startupSignal = options.startupSignal;
     const cancelStartup = (): void => { this.endSessionExtensionDialogs(boundSession.sessionId); };
