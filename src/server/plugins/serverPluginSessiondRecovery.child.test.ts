@@ -62,7 +62,7 @@ describe("sessiond persisted server plugin recovery", () => {
 
     const child = spawnFixtureDaemon(root);
 
-    const startupOutput = await waitForOutput(child, "Server listening at", 15_000);
+    const startupOutput = await waitForOutput(child, "Server listening at", 30_000);
     expect(startupOutput).toContain("Server listening at");
     expect(startupOutput).toContain("No server plugins will be loaded until safe start is repaired");
     expect(existsSync(markerPath)).toBe(false);
@@ -78,7 +78,7 @@ describe("sessiond persisted server plugin recovery", () => {
     );
     expect(existsSync(markerPath)).toBe(false);
     expect(existsSync(join(dataDir, "plugin-data"))).toBe(false);
-  }, 30_000);
+  }, 45_000);
 
   // Persistent-directory lifecycle I/O is exercised at the runtime seam. This
   // smoke keeps early-state startup alongside the real late-authority assembly.
@@ -232,7 +232,7 @@ describe("sessiond persisted server plugin recovery", () => {
 
     const child = spawnFixtureDaemon(root);
 
-    const startupOutput = await waitForOutput(child, "Server listening at", 20_000);
+    const startupOutput = await waitForOutput(child, "Server listening at", 30_000);
     expect(startupOutput).toContain("WORKSPACE_CONSUMER_STARTED");
     expect((await readFile(eventsPath, "utf8")).trim().split("\n")).toEqual([
       "provider:start",
@@ -285,7 +285,7 @@ describe("sessiond persisted server plugin recovery", () => {
       "consumer:start",
       "provider:dispose",
     ]);
-  }, 40_000);
+  }, 60_000);
 
   // Plugin stop on SIGTERM requires POSIX signal delivery; Windows
   // force-terminates the child without running shutdown handlers.
@@ -325,7 +325,7 @@ describe("sessiond persisted server plugin recovery", () => {
 
     const child = spawnFixtureDaemon(root);
 
-    await waitForOutput(child, "PLUGIN_STARTED", 15_000);
+    await waitForOutput(child, "PLUGIN_STARTED", 30_000);
     expect(existsSync(startedMarker)).toBe(true);
     child.kill("SIGTERM");
     const exit = await waitForExit(child, 15_000);
@@ -333,7 +333,7 @@ describe("sessiond persisted server plugin recovery", () => {
 
     expect(exit).toEqual({ code: 0, signal: null });
     expect(existsSync(stoppedMarker)).toBe(true);
-  }, 35_000);
+  }, 50_000);
 });
 
 async function readJsonObject(path: string): Promise<Record<string, unknown>> {

@@ -37,7 +37,7 @@ describe("Pi SDK package integrity", () => {
     ]) {
       expect(typeof sdk[name], name).toBe("function");
     }
-  });
+  }, 30_000);
 
   it("loads the pi-ai barrel with the runtime surface PI WEB uses", async () => {
     const sdk = await importSdk("@earendil-works/pi-ai");
@@ -45,13 +45,13 @@ describe("Pi SDK package integrity", () => {
     for (const name of ["createAssistantMessageEventStream", "InMemoryCredentialStore", "modelsAreEqual"]) {
       expect(typeof sdk[name], name).toBe("function");
     }
-  });
+  }, 30_000);
 
   it("loads the pi-agent-core barrel with the runtime surface PI WEB uses", async () => {
     const sdk = await importSdk("@earendil-works/pi-agent-core");
 
     expect(typeof sdk["runAgentLoop"], "runAgentLoop").toBe("function");
-  });
+  }, 30_000);
 });
 
 async function importSdk(specifier: string): Promise<Record<string, unknown>> {

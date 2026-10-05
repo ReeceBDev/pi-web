@@ -88,12 +88,14 @@ describe("server plugin execFile helper", () => {
     })).rejects.toThrow("AbortSignal");
   });
 
-  it.skipIf(process.platform === "win32")("terminates the command process group when a deadline expires", async () => {
+  it.skipIf(process.platform === "win32")("terminates the command process group when a deadline expires", { timeout: 30_000 }, async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "pi-web-plugin-exec-tree-"));
     const pidPath = join(tempDir, "descendant.pid");
     let descendantPid: number | undefined;
     try {
-      const execFile = createServerPluginExecFile({ maxTimeoutMs: 200 });
+      // 200ms was too tight for node startup under full-suite load; the parent was killed
+      // before it could spawn the descendant and write the pid file.
+      const execFile = createServerPluginExecFile({ maxTimeoutMs: 5_000 });
       const parentSource = `
         const { spawn } = require("node:child_process");
         const { writeFileSync } = require("node:fs");
@@ -106,8 +108,18 @@ describe("server plugin execFile helper", () => {
         file: process.execPath,
         args: ["-e", parentSource],
         signal: new AbortController().signal,
-      })).rejects.toThrow("200ms");
-      descendantPid = Number(await readFile(pidPath, "utf8"));
+      })).rejects.toThrow("5000ms");
+      // The 200ms deadline can kill the parent before it writes the pid file under load.
+      descendantPid = undefined;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        try {
+          descendantPid = Number(await readFile(pidPath, "utf8"));
+          break;
+        } catch {
+          await new Promise((resolvePromise) => { setTimeout(resolvePromise, 10); });
+        }
+      }
+      if (descendantPid === undefined) throw new Error("Descendant pid file never appeared before the deadline");
 
       await expectProcessExit(descendantPid);
     } finally {

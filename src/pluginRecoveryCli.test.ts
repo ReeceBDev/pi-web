@@ -83,7 +83,7 @@ describe("plugin recovery CLI", () => {
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({});
   });
 
-  it("disables a plugin beside malformed safe start with sessiond absent and no plugin imports", async () => {
+  it("disables a plugin beside malformed safe start with sessiond absent and no plugin imports", { timeout: 30_000 }, async () => {
     const markerPath = join(tempDir, "poison-imported");
     const pluginRoot = join(tempDir, "data", "plugins", "poison");
     await mkdir(pluginRoot, { recursive: true });

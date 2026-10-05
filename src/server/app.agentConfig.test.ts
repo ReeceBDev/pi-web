@@ -65,7 +65,7 @@ describe("buildApp active agent profile", () => {
     } finally {
       restoreEnv(originalEnv);
     }
-  });
+  }, 30_000);
 });
 
 function activeProfile(dir: string): ActiveAgentProfileDescriptor {

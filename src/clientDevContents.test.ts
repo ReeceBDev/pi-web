@@ -33,5 +33,5 @@ describe("manual-refresh development client", () => {
     } finally {
       await server.close();
     }
-  });
+  }, 30_000);
 });

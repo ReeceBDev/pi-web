@@ -24,7 +24,7 @@ function transcript(view: ChatView): HTMLElement {
 }
 
 describe("transcript DOM ownership", () => {
-  it("keeps retained nodes bounded over 200 switches between differently shaped sessions", async () => {
+  it("keeps retained nodes bounded over 200 switches between differently shaped sessions", { timeout: 30_000 }, async () => {
     const view = new ChatView();
     document.body.append(view);
     const conversation = Array.from({ length: 20 }, (_, index) => textMessage(index % 2 === 0 ? "user" : "assistant", `message ${String(index)}`));

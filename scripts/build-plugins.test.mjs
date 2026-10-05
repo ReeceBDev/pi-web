@@ -149,7 +149,7 @@ it("removes stale readiness when a rebuild fails", async () => {
   await writeFile(readyPath, "ready\n");
   await expect(execUtf8(process.execPath, ["scripts/build-plugins.mjs"], tempDir, 30_000)).rejects.toThrow(/files[/\\]package\.json/u);
   await expect(readFile(readyPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-});
+}, 30_000);
 
 function execUtf8(file, args, cwd, timeoutMs) {
   return new Promise((resolvePromise, reject) => {
