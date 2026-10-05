@@ -259,6 +259,10 @@ export class SessionController {
     const pending = this.createPendingSessionStart(workspace, machineId, this.navigationSelection(), pendingUrlPublished);
     this.pendingSessionStarts.set(pending.tempId, pending);
     this.insertAndSelectPendingSession(pending.session, { updateUrl: options?.updateUrl });
+    // Persist the row before the backend answers: a reload mid-start (mobile tab
+    // discard) otherwise loses the session entirely — the client never learned
+    // its id and empty sessions are invisible to server listings.
+    rememberCachedNewSession(pending.session, machineId);
     // The creation route is the handoff identity, not the previously selected session.
     if (pendingUrlPublished) pending.expectedNavigation = this.navigationSelection();
     // Start the freshness window after the pending-row URL publication. The
@@ -276,11 +280,10 @@ export class SessionController {
   preferredSession(cwd: string, sessions: SessionInfo[], targetSessionId: string | undefined): SessionInfo | undefined {
     if (isCreatingSessionId(targetSessionId)) {
       const pending = this.pendingSessionStarts.get(targetSessionId);
-      // Reloaded/expired creation links are inert: never join a backend with
-      // this token, fall back to another session, or issue another create.
-      return pending !== undefined && !pending.discarded && pending.cwd === cwd && this.isCurrentPendingStart(pending)
-        ? pending.session
-        : undefined;
+      if (pending !== undefined && !pending.discarded && pending.cwd === cwd && this.isCurrentPendingStart(pending)) return pending.session;
+      // No live pending start: the row was restored from cached-new storage
+      // after a reload mid-start. Fall through so route restore selects it;
+      // selecting an unknown session id routes into the 404 recreation path.
     }
     return selectPreferredSession(sessions, { targetSessionId, latestSessionId: this.sessionSelection.latestSessionId(this.workspaceSelectionKey(cwd)) });
   }
@@ -1616,6 +1619,8 @@ export class SessionController {
     }
 
     rememberCachedNewSession(session, pending.machineId);
+    // The temp row's storage entry is superseded by the real session's.
+    forgetCachedNewSession(tempId, pending.machineId);
     moveDraft(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));
     moveStagedAttachments(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));
     const cachedSession = markCachedNewSessionInfo(session, pending.machineId);
@@ -1727,6 +1732,7 @@ export class SessionController {
     const pending = this.pendingSessionStarts.get(tempId);
     if (pending === undefined) return;
     this.pendingSessionStarts.delete(tempId);
+    forgetCachedNewSession(tempId, pending.machineId);
     const wasDiscarded = pending.discarded;
     // The pending start is dead: stop routing its dialog frames (a card on the
     // failed row could never be answered) and drop the early-subscribed socket

@@ -281,4 +281,72 @@ describe("SessionController cached-new sessions", () => {
     // The guard discarded the fetched list, so the storage entry must survive.
     expect(loadCachedNewSessions(storage).map((session) => session.id)).toEqual(["started-session"]);
   });
+
+  it("persists the pending start row so a reload mid-start can restore it", async () => {
+    const storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
+    const started: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
+    const startRequest = deferred<SessionInfo>();
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([oldSession]),
+      startSession: () => startRequest.promise,
+      transcriptSnapshot: (session) => Promise.resolve({ page: emptyPage, status: status(sessionLookupId(session)), seq: 0, partial: null }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    const start = controller.startSession();
+    const tempId = state.selectedSession?.id;
+    expect(tempId).toMatch(/^creating:/);
+    // The row is durable before the backend answers, so a discarded mobile tab
+    // cannot lose the session (and its draft) without a trace.
+    expect(loadCachedNewSessions(storage).map((session) => session.id)).toEqual([tempId]);
+
+    // Reload mid-start: fresh controller and state, same storage.
+    let reloadedState: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const reloaded = new SessionController(
+      () => reloadedState,
+      (patch) => { reloadedState = { ...reloadedState, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+    await reloaded.refreshCurrentWorkspaceSessions();
+    expect(reloadedState.sessions.map((session) => session.id)).toContain(tempId);
+    expect(reloaded.preferredSession(workspace.path, reloadedState.sessions, tempId)?.id).toBe(tempId);
+
+    // Once the original start settles, only the real session stays cached.
+    startRequest.resolve(started);
+    await start;
+    expect(loadCachedNewSessions(storage).map((session) => session.id)).toEqual(["started-session"]);
+  });
+
+  it("forgets the pending start row when the start fails", async () => {
+    const storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      startSession: () => Promise.reject(new Error("daemon unreachable")),
+      transcriptSnapshot: (session) => Promise.resolve({ page: emptyPage, status: status(sessionLookupId(session)), seq: 0, partial: null }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    await controller.startSession();
+
+    expect(loadCachedNewSessions(storage)).toEqual([]);
+  });
 });
