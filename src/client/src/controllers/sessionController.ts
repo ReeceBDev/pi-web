@@ -868,12 +868,17 @@ export class SessionController {
     const workspace = this.getState().selectedWorkspace;
     if (workspace === undefined) return;
     try {
-      const listedSessions = mergeCachedNewSessions(workspace.path, await this.api.sessions(workspace.path, machineId), machineId)
+      const fetchedSessions = await this.api.sessions(workspace.path, machineId);
+      const listedSessions = mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
         .filter((session) => !this.isSuppressedCreatedSession(session, machineId));
       if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
       const selectedSession = this.getState().selectedSession;
-      this.setState({ sessions });
+      this.setState({
+        sessions,
+        // Fresh server truth supersedes the catalog snapshot (see workspaceController.selectWorkspace).
+        sessionsByWorkspacePath: { ...this.getState().sessionsByWorkspacePath, [workspace.path]: fetchedSessions },
+      });
       const expected = this.navigationSelection();
       if (selectedSession === undefined) return;
       const refreshedSelected = sessions.find((session) => session.id === selectedSession.id);

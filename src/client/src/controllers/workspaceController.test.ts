@@ -815,6 +815,7 @@ describe("WorkspaceController catalog caches", () => {
 
     expect(loadSessions).toHaveBeenCalledWith(main.path, "local");
     expect(test.state().sessions).toEqual([remote]);
+    expect(test.state().sessionsByWorkspacePath).toEqual({ [main.path]: [remote] });
   });
 
   it("drops the closed project's cached workspaces and session lists", () => {

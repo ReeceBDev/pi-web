@@ -414,6 +414,7 @@ describe("SessionController pending starts", () => {
 
     expect(state.sessions.map((session) => session.id)).toEqual([temporaryId, oldSession.id]);
     expect(state.selectedSession?.id).toBe(temporaryId);
+    expect(state.sessionsByWorkspacePath[workspace.path]).toEqual([oldSession]);
 
     startRequest.resolve(started);
     await start;

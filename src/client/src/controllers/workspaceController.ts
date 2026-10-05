@@ -124,7 +124,12 @@ export class WorkspaceController {
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedWorkspace?.id !== workspace.id
         || this.getState().selectedProject?.id !== workspace.projectId) return;
-      this.setState({ sessions });
+      this.setState({
+        sessions,
+        // A fresh listing is newer than the catalog snapshot; write it back so
+        // returning to this workspace does not resurrect a stale session list.
+        ...(cachedSessions === undefined ? { sessionsByWorkspacePath: { ...this.getState().sessionsByWorkspacePath, [workspace.path]: loadedSessions } } : {}),
+      });
       const session = this.sessions.preferredSession(workspace.path, sessions, target?.sessionId);
       if (!this.navigationIsCurrent(navigation) || !workspaceMutationIsCurrent(target)) return;
       if (session) await this.sessions.selectSession(session, { updateUrl: target?.updateUrl, ...(navigation === undefined ? {} : { navigation }) });
