@@ -65,8 +65,10 @@ export class WorkspaceController {
     const machineId = selectedMachineId(this.getState());
     this.browserErrors.discard(projectBrowserErrorScope(machineId, projectId));
     this.workspaceSelection.forgetProject(machineProjectKey(machineId, projectId));
+    const forgottenWorkspacePaths = new Set((this.getState().workspacesByProjectId[projectId] ?? []).map((workspace) => workspace.path));
     const workspacesByProjectId = Object.fromEntries(Object.entries(this.getState().workspacesByProjectId).filter(([candidate]) => candidate !== projectId));
-    this.setState({ workspacesByProjectId });
+    const sessionsByWorkspacePath = Object.fromEntries(Object.entries(this.getState().sessionsByWorkspacePath).filter(([path]) => !forgottenWorkspacePaths.has(path)));
+    this.setState({ workspacesByProjectId, sessionsByWorkspacePath });
   }
 
   async selectProject(project: Project, target?: WorkspaceSelectionTarget): Promise<string | undefined> {
@@ -77,7 +79,7 @@ export class WorkspaceController {
     this.sessions.clearActiveSession();
     this.setState({ selectedProject: project, selectedWorkspace: undefined, workspaces: [], isLoadingWorkspaces: true, ...resetWorkspaceScopedState() });
     try {
-      const workspaces = await this.api.workspaces(project.id, machineId);
+      const workspaces = this.getState().workspacesByProjectId[project.id] ?? await this.api.workspaces(project.id, machineId);
       if (!this.navigationIsCurrent(navigation)
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedProject?.id !== project.id) return;
@@ -111,9 +113,11 @@ export class WorkspaceController {
     this.sessions.clearActiveSession();
     this.setState({ selectedWorkspace: workspace, isLoadingWorkspaces: false, ...resetWorkspaceScopedState() });
     try {
-      const loadedSessions = target?.signal === undefined
-        ? await this.api.sessions(workspace.path, machineId)
-        : await this.api.sessions(workspace.path, machineId, { signal: target.signal });
+      const cachedSessions = this.getState().sessionsByWorkspacePath[workspace.path];
+      const loadedSessions = cachedSessions
+        ?? (target?.signal === undefined
+          ? await this.api.sessions(workspace.path, machineId)
+          : await this.api.sessions(workspace.path, machineId, { signal: target.signal }));
       const sessions = mergeCachedNewSessions(workspace.path, loadedSessions, machineId);
       if (!this.navigationIsCurrent(navigation)
         || !workspaceMutationIsCurrent(target)

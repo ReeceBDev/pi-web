@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionInfo } from "../api";
+import type { Project, SessionInfo } from "../api";
 import { initialAppState, type AppState } from "../appState";
 import { AuthDialog } from "./AuthDialog";
 import { ChatView } from "./ChatView";
@@ -143,6 +143,113 @@ describe("PiWebApp global shortcut modality boundary", () => {
   });
 });
 
+describe("PiWebApp prompt focus and chat scroll on view switch", () => {
+  it("focuses the prompt after switching to chat when the auto-focus gate accepts", async () => {
+    const app = new PiWebApp();
+    vi.spyOn(appShellLayout(app), "shouldAutoFocusPrompt").mockReturnValue(true);
+    setAppState(app, { mainView: "chat" });
+    const focusInput = vi.fn();
+    Object.defineProperty(app, "promptEditor", { configurable: true, value: { focusInput } });
+    Object.defineProperty(app, "updateComplete", { configurable: true, value: Promise.resolve(true) });
+    const frames = stubFrameRequests();
+
+    const focusing = focusChatComposer(app);
+    await vi.waitFor(() => { expect(frames.scheduled()).toBeGreaterThan(0); });
+    frames.flush();
+    await focusing;
+
+    expect(focusInput).toHaveBeenCalledOnce();
+  });
+
+  it("skips the prompt focus when the auto-focus gate declines (mobile or PWA)", async () => {
+    const app = new PiWebApp();
+    vi.spyOn(appShellLayout(app), "shouldAutoFocusPrompt").mockReturnValue(false);
+    setAppState(app, { mainView: "chat" });
+    const focusInput = vi.fn();
+    Object.defineProperty(app, "promptEditor", { configurable: true, value: { focusInput } });
+    Object.defineProperty(app, "updateComplete", { configurable: true, value: Promise.resolve(true) });
+    const frames = stubFrameRequests();
+
+    const focusing = focusChatComposer(app);
+    await vi.waitFor(() => { expect(frames.scheduled()).toBeGreaterThan(0); });
+    frames.flush();
+    await focusing;
+
+    expect(focusInput).not.toHaveBeenCalled();
+  });
+
+  it("restores chat scroll after the chat view becomes visible with a selected session", async () => {
+    const app = new PiWebApp();
+    setAppState(app, { mainView: "navigation", selectedSession: session("session-scroll") });
+    const restoreScrollPosition = vi.fn();
+    Object.defineProperty(app, "chatView", { configurable: true, value: { restoreScrollPosition } });
+    Object.defineProperty(app, "updateComplete", { configurable: true, value: Promise.resolve(true) });
+    const frames = stubFrameRequests();
+
+    selectMainView(app, "chat");
+    await vi.waitFor(() => { expect(frames.scheduled()).toBeGreaterThan(0); });
+    frames.flush();
+    await vi.waitFor(() => { expect(restoreScrollPosition).toHaveBeenCalled(); });
+
+    expect(restoreScrollPosition).toHaveBeenCalledOnce();
+  });
+
+  it("does not stack chat scroll restores when the view changes again mid-flight", async () => {
+    const app = new PiWebApp();
+    setAppState(app, { mainView: "navigation", selectedSession: session("session-scroll") });
+    const restoreScrollPosition = vi.fn();
+    Object.defineProperty(app, "chatView", { configurable: true, value: { restoreScrollPosition } });
+    Object.defineProperty(app, "updateComplete", { configurable: true, value: Promise.resolve(true) });
+    const frames = stubFrameRequests();
+
+    selectMainView(app, "chat");
+    selectMainView(app, "workspace");
+    selectMainView(app, "chat");
+    await settleMicrotasks();
+    frames.flush();
+    await vi.waitFor(() => { expect(restoreScrollPosition).toHaveBeenCalled(); });
+
+    expect(restoreScrollPosition).toHaveBeenCalledOnce();
+  });
+
+  it("does not schedule a chat scroll restore when chat is already shown or no session is selected", async () => {
+    const app = new PiWebApp();
+    const restoreScrollPosition = vi.fn();
+    Object.defineProperty(app, "chatView", { configurable: true, value: { restoreScrollPosition } });
+    Object.defineProperty(app, "updateComplete", { configurable: true, value: Promise.resolve(true) });
+    const frames = stubFrameRequests();
+
+    setAppState(app, { mainView: "chat", selectedSession: session("session-scroll") });
+    selectMainView(app, "chat");
+    await settleMicrotasks();
+
+    setAppState(app, { mainView: "navigation" });
+    selectMainView(app, "chat");
+    await settleMicrotasks();
+
+    expect(frames.scheduled()).toBe(0);
+    expect(restoreScrollPosition).not.toHaveBeenCalled();
+  });
+
+  it("sends project selection to chat on mobile and to workspaces on desktop", () => {
+    const project = testProject("p1");
+
+    const mobileApp = new PiWebApp();
+    appShellLayout(mobileApp).isMobileNavigationLayout = true;
+    const mobileSelect = stubSelectNavigationItem(mobileApp);
+    navigationActionsOf(mobileApp).selectProject(project);
+    expect(mobileSelect.mock.calls[0]?.[0]).toBe("projects");
+    expect(mobileSelect.mock.calls[0]?.[1]).toBe("chat");
+
+    const desktopApp = new PiWebApp();
+    appShellLayout(desktopApp).isMobileNavigationLayout = false;
+    const desktopSelect = stubSelectNavigationItem(desktopApp);
+    navigationActionsOf(desktopApp).selectProject(project);
+    expect(desktopSelect.mock.calls[0]?.[0]).toBe("projects");
+    expect(desktopSelect.mock.calls[0]?.[1]).toBe("workspaces");
+  });
+});
+
 type AppKeyDownHandler = (event: KeyboardEvent) => void;
 type FocusChatComposer = (this: PiWebApp) => Promise<void>;
 
@@ -270,6 +377,71 @@ function actionPaletteIsOpen(app: PiWebApp): boolean {
 
 function setAppState(app: PiWebApp, patch: Partial<AppState>): void {
   if (!Reflect.set(app, "state", { ...initialAppState(), ...patch })) throw new Error("Could not set PiWebApp state");
+}
+
+interface AppShellLayout {
+  isMobileNavigationLayout: boolean;
+  shouldAutoFocusPrompt: () => boolean;
+}
+
+function appShellLayout(app: PiWebApp): AppShellLayout {
+  const shell: unknown = Reflect.get(app, "appShell");
+  if (!isAppShellLayout(shell)) throw new Error("PiWebApp app shell was unavailable");
+  return shell;
+}
+
+function isAppShellLayout(value: unknown): value is AppShellLayout {
+  return typeof value === "object" && value !== null && "isMobileNavigationLayout" in value
+    && "shouldAutoFocusPrompt" in value && typeof value.shouldAutoFocusPrompt === "function";
+}
+
+function stubFrameRequests(): { flush: () => void; scheduled: () => number } {
+  const callbacks: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  });
+  return {
+    flush: () => { for (const callback of callbacks.splice(0)) callback(performance.now()); },
+    scheduled: () => callbacks.length,
+  };
+}
+
+function settleMicrotasks(): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, 0); });
+}
+
+type SelectMainView = (this: PiWebApp, view: AppState["mainView"]) => void;
+
+function selectMainView(app: PiWebApp, view: AppState["mainView"]): void {
+  const method: unknown = Reflect.get(app, "selectMainView");
+  if (!isSelectMainView(method)) throw new Error("PiWebApp main-view switch was unavailable");
+  Reflect.apply(method, app, [view]);
+}
+
+function isSelectMainView(value: unknown): value is SelectMainView {
+  return typeof value === "function";
+}
+
+function stubSelectNavigationItem(app: PiWebApp): ReturnType<typeof vi.fn> {
+  const selection = vi.fn();
+  Object.defineProperty(app, "selectNavigationItem", { configurable: true, value: selection });
+  return selection;
+}
+
+function navigationActionsOf(app: PiWebApp): { selectProject: (project: Project) => unknown } {
+  const actions: unknown = Reflect.get(app, "navigationActions");
+  if (!isNavigationActions(actions)) throw new Error("PiWebApp navigation actions were unavailable");
+  return actions;
+}
+
+function isNavigationActions(value: unknown): value is { selectProject: (project: Project) => unknown } {
+  return typeof value === "object" && value !== null && "selectProject" in value
+    && typeof value.selectProject === "function";
+}
+
+function testProject(id: string): Project {
+  return { id, name: id, path: `/repo/${id}`, createdAt: "2026-07-20T00:00:00.000Z" };
 }
 
 function appendKeyTarget(): HTMLButtonElement {

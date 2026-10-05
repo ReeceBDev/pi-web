@@ -62,6 +62,7 @@ export interface AppDependencies {
 
 interface LocalProjectRouteOptions {
   config?: Pick<PiWebConfigService, "read">;
+  sessionDaemon?: SessionProxyDaemon;
 }
 
 function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectService, workspaces: WorkspaceCatalog, prefix: string, options: LocalProjectRouteOptions = {}): void {
@@ -83,6 +84,46 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
       return sendWorkspaceRequestError(reply, error, 404);
     }
   });
+
+  // One-request bulk listing: every project, its workspaces, and each
+  // workspace's sessions. A workspace whose session list fails contributes an
+  // empty list so one dead workspace cannot blank the whole catalog.
+  app.get(`${prefix}/projects/catalog`, async (_request, reply) => {
+    try {
+      const all = await projects.list();
+      return { projects: await Promise.all(all.map(async (project) => ({
+        ...project,
+        workspaces: await catalogWorkspaces(options.sessionDaemon, project, workspaces, options.config),
+      }))) };
+    } catch (error) {
+      return sendWorkspaceRequestError(reply, error, 404);
+    }
+  });
+}
+
+async function catalogWorkspaces(
+  sessionDaemon: SessionProxyDaemon | undefined,
+  project: Project,
+  workspaces: WorkspaceCatalog,
+  config?: Pick<PiWebConfigService, "read">,
+) {
+  const resolution = await resolveWorkspacesWithEffectiveConfig(project, workspaces, config);
+  return Promise.all(resolution.workspaces.map(async (workspace) => ({
+    ...workspace,
+    sessions: await workspaceSessions(sessionDaemon, workspace.path),
+  })));
+}
+
+async function workspaceSessions(sessionDaemon: SessionProxyDaemon | undefined, workspacePath: string): Promise<unknown[]> {
+  if (sessionDaemon === undefined) return [];
+  try {
+    const upstream = await sessionDaemon.request("GET", `/sessions?cwd=${encodeURIComponent(workspacePath)}`);
+    if (upstream.statusCode < 200 || upstream.statusCode >= 300) return [];
+    const sessions: unknown = JSON.parse(upstream.body);
+    return Array.isArray(sessions) ? Array.from<unknown>(sessions) : [];
+  } catch {
+    return [];
+  }
 }
 
 async function resolveWorkspacesWithEffectiveConfig(
@@ -231,8 +272,8 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerMachineRoutes(app, machines);
   registerMachinePluginProxyRoutes(app, machines);
 
-  registerLocalProjectRoutes(app, projects, workspaces, "/api", { config: configService });
-  registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
+  registerLocalProjectRoutes(app, projects, workspaces, "/api", { config: configService, sessionDaemon });
+  registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService, sessionDaemon });
 
   registerSessionProxyRoutes(app, sessionDaemon);
   registerSessionProxyRoutes(app, sessionDaemon, "/api/machines/local");

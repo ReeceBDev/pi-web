@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AppState } from "../appState";
 import { initialAppState } from "../appState";
-import type { Project, Workspace } from "../api";
+import type { Project, SessionInfo, Workspace } from "../api";
 import { browserErrorScopeKey, machineBrowserErrorScope, projectBrowserErrorScope } from "../browserErrors";
 import { ProjectController } from "./projectController";
 
@@ -23,8 +23,7 @@ describe("ProjectController", () => {
       setState,
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn().mockRejectedValue(failure),
           addProject: vi.fn(),
           closeProject: vi.fn(),
@@ -48,8 +47,7 @@ describe("ProjectController", () => {
       setState,
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
           addProject: vi.fn(),
           closeProject: vi.fn().mockRejectedValue(failure),
@@ -73,8 +71,7 @@ describe("ProjectController", () => {
       setState,
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
           addProject: vi.fn().mockRejectedValue(failure),
           closeProject: vi.fn(),
@@ -104,8 +101,7 @@ describe("ProjectController", () => {
       setState,
       { selectProject, forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
@@ -135,8 +131,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn().mockResolvedValue([currentProject]),
           addProject: vi.fn(),
           closeProject: vi.fn(),
@@ -169,8 +164,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
           addProject: vi.fn(),
           closeProject: () => closeRequest,
@@ -208,8 +202,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject, forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
@@ -233,8 +226,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
@@ -271,8 +263,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject, forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
@@ -296,8 +287,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
@@ -328,8 +318,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
@@ -359,8 +348,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject, forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([workspace(addedProject.id, addedProject.path)]),
           projects: vi.fn(),
           addProject: vi.fn().mockResolvedValue(addedProject),
           closeProject: vi.fn(),
@@ -395,8 +383,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: {
-          projects: vi.fn(), closeProject: vi.fn(), workspaces, setWorkspaceTrust,
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")),          projects: vi.fn(), closeProject: vi.fn(), workspaces, setWorkspaceTrust,
           addProject: async () => {
             if (phase === "creation") await pause();
             return addedProject;
@@ -442,7 +429,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
-        api: { projects: vi.fn(), closeProject: vi.fn(), addProject: vi.fn().mockResolvedValue(addedProject), workspaces, setWorkspaceTrust },
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), projects: vi.fn(), closeProject: vi.fn(), addProject: vi.fn().mockResolvedValue(addedProject), workspaces, setWorkspaceTrust },
         navigateToProject,
       },
     );
@@ -485,8 +472,7 @@ describe("ProjectController", () => {
       (patch) => { state = { ...state, ...patch }; },
       { selectProject: vi.fn(), forgetProject, clearSelection },
       {
-        api: {
-          workspaces: vi.fn().mockResolvedValue([]),
+        api: { catalog: vi.fn().mockRejectedValue(new Error("Catalog unavailable")), workspaces: vi.fn().mockResolvedValue([]),
           projects: vi.fn(),
           addProject: vi.fn(),
           closeProject: vi.fn().mockResolvedValue(undefined),
@@ -501,5 +487,75 @@ describe("ProjectController", () => {
     expect(state.projects).toEqual([remainingProject]);
     expect(state.workspacesByProjectId[closedProject.id]).toBeUndefined();
     expect(clearSelection).toHaveBeenCalledOnce();
+  });
+
+  it("populates projects, workspaces, and sessions from one catalog request", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path);
+    const catalogSession: SessionInfo = { id: "s1", cwd: main.path, path: `${main.path}/.pi/s1`, created: "now", modified: "now", messageCount: 1, firstMessage: "hello" };
+    let state: AppState = { ...initialAppState() };
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const projects = vi.fn();
+    const controller = new ProjectController(
+      () => state,
+      setState,
+      { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
+      {
+        api: {
+          catalog: vi.fn().mockResolvedValue({ projects: [{ ...repo, workspaces: [{ ...main, sessions: [catalogSession] }] }] }),
+          projects,
+          addProject: vi.fn(),
+          closeProject: vi.fn(),
+          workspaces: vi.fn(),
+          setWorkspaceTrust: vi.fn(),
+        },
+      },
+    );
+
+    await controller.loadProjects();
+
+    expect(projects).not.toHaveBeenCalled();
+    expect(state.projects.map((candidate) => candidate.id)).toEqual([repo.id]);
+    expect(state.workspacesByProjectId).toEqual({ [repo.id]: [{ ...main, sessions: [catalogSession] }] });
+    expect(state.sessionsByWorkspacePath).toEqual({ [main.path]: [catalogSession] });
+    expect(state.isLoadingProjects).toBe(false);
+  });
+
+  it("falls back to the projects waterfall when the catalog is unavailable", async () => {
+    const repo = project("p1", "/repo");
+    const closed = project("gone", "/gone");
+    const main = workspace(repo.id, repo.path);
+    const goneSession: SessionInfo = { id: "s-gone", cwd: "/gone", path: "/gone/.pi/s-gone", created: "now", modified: "now", messageCount: 0, firstMessage: "" };
+    let state: AppState = {
+      ...initialAppState(),
+      workspacesByProjectId: { [repo.id]: [main], [closed.id]: [workspace(closed.id, closed.path)] },
+      sessionsByWorkspacePath: { [main.path]: [], "/gone": [goneSession] },
+    };
+    const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
+    const projects = vi.fn().mockResolvedValue([repo]);
+    const controller = new ProjectController(
+      () => state,
+      setState,
+      { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
+      {
+        api: {
+          catalog: vi.fn().mockRejectedValue(new Error("404")),
+          projects,
+          addProject: vi.fn(),
+          closeProject: vi.fn(),
+          workspaces: vi.fn(),
+          setWorkspaceTrust: vi.fn(),
+        },
+      },
+    );
+
+    await controller.loadProjects();
+
+    expect(projects).toHaveBeenCalledWith("local");
+    expect(state.projects).toEqual([repo]);
+    expect(state.workspacesByProjectId).toEqual({ [repo.id]: [main] });
+    expect(state.sessionsByWorkspacePath).toEqual({ [main.path]: [] });
+    expect(state.isLoadingProjects).toBe(false);
+    expect(state.error).toBe("");
   });
 });

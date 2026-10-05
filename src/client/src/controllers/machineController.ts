@@ -73,6 +73,7 @@ export class MachineController {
       sessionActivities: {},
       sendingPrompts: {},
       workspacesByProjectId: {},
+      sessionsByWorkspacePath: {},
       workspaceDeletionRuns: {},
       ...resetWorkspaceScopedState(),
     });

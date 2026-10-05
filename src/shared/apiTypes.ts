@@ -424,6 +424,21 @@ export interface Workspace {
 /** Workspace as listed by the workspace authority, before the browser route layer attaches the wire-required effectiveConfig. */
 export type WorkspaceListing = Omit<Workspace, "effectiveConfig">;
 
+/** One catalog workspace: the host workspace plus its session list. */
+export interface CatalogWorkspace extends Workspace {
+  readonly sessions: SessionInfo[];
+}
+
+/** One catalog project: the project plus every workspace with its sessions. */
+export interface CatalogProject extends Project {
+  readonly workspaces: CatalogWorkspace[];
+}
+
+/** One-request bulk listing served by GET /projects/catalog. */
+export interface ProjectCatalog {
+  readonly projects: CatalogProject[];
+}
+
 /** Provider resolution as served by the sessiond workspace authority; the browser route layer attaches effectiveConfig to every workspace before responding. */
 export type WorkspaceProviderAuthorityResolution = Omit<WorkspaceProviderResolution, "workspaces"> & {
   workspaces: readonly WorkspaceListing[];

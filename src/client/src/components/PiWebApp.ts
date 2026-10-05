@@ -284,6 +284,7 @@ export class PiWebApp extends LitElement {
   private readonly dismissedRequiredPluginFailureByMachine = new Map<string, string>();
   private machineNavigationRestoreSeq = 0;
   private navigationSelectionSeq = 0;
+  private chatScrollRestoreSeq = 0;
   private modelDialogInstanceId = 0;
   private routeRestoreSeq = 0;
   private routeSelectionRestoreSeq = 0;
@@ -1468,11 +1469,24 @@ export class PiWebApp extends LitElement {
   }
 
   private selectMainView(view: AppState["mainView"], options: { invalidateNavigationSelection?: boolean | undefined } = {}) {
+    const previousView = this.state.mainView;
     if (options.invalidateNavigationSelection !== false) this.invalidateNavigationSelection();
     const currentSnapshot = machineNavigationSnapshotFromState(this.state, this.currentContributionQueryForState());
     this.commitMachineNavigationSnapshot({ ...currentSnapshot, view });
     this.retireRouteRestoreForSynchronousNavigation();
     this.setState({ mainView: view });
+    // On mobile the chat view is display:none while hidden, so any
+    // scroll-to-bottom that ran during selection was a no-op; re-run it once
+    // the view is actually rendered.
+    if (view === "chat" && previousView !== "chat" && this.state.selectedSession !== undefined) void this.restoreChatScrollAfterRender();
+  }
+
+  private async restoreChatScrollAfterRender(): Promise<void> {
+    const seq = ++this.chatScrollRestoreSeq;
+    await this.updateComplete;
+    await nextFrame();
+    if (seq !== this.chatScrollRestoreSeq) return;
+    this.chatView?.restoreScrollPosition();
   }
 
   private openSettings(section: SettingsSection = "general"): void {
@@ -1814,7 +1828,7 @@ export class PiWebApp extends LitElement {
     toggleProjects: () => { this.navigationSections.toggle("projects"); },
     toggleWorkspaces: () => { this.navigationSections.toggle("workspaces"); },
     toggleSessions: () => { this.navigationSections.toggle("sessions"); },
-    selectProject: (project: Project) => this.selectNavigationItem("projects", "workspaces", () => this.selectProjectFromNavigation(project)),
+    selectProject: (project: Project) => this.selectNavigationItem("projects", this.appShell.isMobileNavigationLayout ? "chat" : "workspaces", () => this.selectProjectFromNavigation(project)),
     closeProject: (project: Project) => this.projects.closeProject(project.id),
     selectWorkspace: (workspace: Workspace) => this.selectNavigationItem("workspaces", "sessions", () => this.selectWorkspaceFromNavigation(workspace)),
     deleteWorkspace: (workspace: Workspace) => { void this.deleteWorkspace(workspace); },
@@ -1988,9 +2002,10 @@ export class PiWebApp extends LitElement {
     if (!isCurrent()) return;
     await nextFrame();
     // The focus request may outlive the dialog transition that scheduled it.
-    // Recheck the rendered boundary at the final side-effect point so a newer
-    // or surviving modal keeps visual and keyboard focus ownership.
-    if (!isCurrent() || this.isRenderedModalOpen()) return;
+    // Recheck the auto-focus gate at the final side-effect point so a newer or
+    // surviving modal keeps focus ownership, and mobile/PWA surfaces never pop
+    // the on-screen keyboard just because a session was selected.
+    if (!isCurrent() || !this.shouldAutoFocusPrompt()) return;
     this.promptEditor?.focusInput();
   }
 

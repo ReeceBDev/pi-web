@@ -62,6 +62,8 @@ export interface AppState {
   /** Authoritative projection plus browser-local optimistic overlays for the selected inbox. */
   selectedNotificationInbox: SelectedSessionNotificationInbox | undefined;
   workspacesByProjectId: Record<string, Workspace[]>;
+  /** Sessions per workspace path from the machine catalog, keyed by workspace path. Machine-scoped like {@link workspacesByProjectId}. */
+  sessionsByWorkspacePath: Record<string, SessionInfo[]>;
   workspaceDeletionRuns: Record<string, TerminalCommandRun>;
   commandDialog: Extract<CommandResult, { type: "select" }> | undefined;
   treeDialog: SessionTreeSnapshot | undefined;
@@ -156,6 +158,7 @@ export function initialAppState(): AppState {
     sessionActivities: {},
     selectedNotificationInbox: undefined,
     workspacesByProjectId: {},
+    sessionsByWorkspacePath: {},
     workspaceDeletionRuns: {},
     commandDialog: undefined,
     treeDialog: undefined,

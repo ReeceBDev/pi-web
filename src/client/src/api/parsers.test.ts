@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ASK_USER_TEXT_MAX_LENGTH, EXTENSION_DIALOG_TEXT_MAX_LENGTH, SESSION_NOTIFICATION_LIMIT, SESSION_NOTIFICATION_MESSAGE_BYTES, SESSION_UNREAD_CATALOG_ID_MAX_LENGTH } from "../../../shared/apiTypes";
-import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
+import { parseAskUserCloseResponse, parseAuthProvidersResponse, parseCommandResult, parseExtensionDialogCloseResponse, parseFileContentResponse, parseFileSuggestion, parseMachineRuntime, parseMessagePage, parseOAuthFlowState, parsePiPackageMutationResponse, parsePiPackagesResponse, parsePiWebConfigResponse, parsePiWebPluginsResponse, parsePiWebRuntimeResponse, parsePiWebStatusResponse, parseProjectCatalog, parseRealtimeStreamEvent, parseSessionBulkArchiveResponse, parseSessionBulkDeleteArchivedResponse, parseSessionCleanupExecuteResponse, parseSessionCleanupPreviewResponse, parseSessionInfo, parseSessionModelCatalogResponse, parseSessionNotificationInboxEvent, parseSessionNotificationInboxSnapshot, parseSessionStartupProgressEvent, parseSessionStatus, parseSessionStreamSnapshot, parseSessionTreeForkResult, parseSessionTreeNavigateResult, parseSessionTreeSnapshot, parseSessionUnreadCatalogSnapshot, parseSessionUnreadEvent, parseSlashCommand, parseWorkspace, parseWorkspaceProviderResolution } from "./parsers";
 
 describe("API parsers", () => {
   it("preserves interactive API-key flow hints and defaults providers without one", () => {
@@ -662,6 +662,54 @@ describe("API parsers", () => {
       cost: 0,
       warnings: [{ severity: "fatal", message: "nope" }],
     })).toThrow("Invalid session warning severity");
+  });
+
+  it("parses the project catalog with nested workspaces and session lists", () => {
+    expect(parseProjectCatalog({
+      projects: [{
+        id: "p1",
+        name: "Repo",
+        path: "/repo",
+        createdAt: "now",
+        workspaces: [{
+          id: "w1",
+          projectId: "p1",
+          path: "/repo",
+          label: "main",
+          isMain: true,
+          effectiveConfig: { uploads: { defaultFolder: ".pi-web/uploads" } },
+          sessions: [{ id: "s1", cwd: "/repo", path: "/repo/.pi/sessions/s1", created: "now", modified: "now", messageCount: 2, firstMessage: "hello" }],
+        }],
+      }],
+    })).toEqual({
+      projects: [{
+        id: "p1",
+        name: "Repo",
+        path: "/repo",
+        createdAt: "now",
+        workspaces: [{
+          id: "w1",
+          projectId: "p1",
+          path: "/repo",
+          label: "main",
+          isMain: true,
+          effectiveConfig: { uploads: { defaultFolder: ".pi-web/uploads" } },
+          sessions: [{ id: "s1", cwd: "/repo", path: "/repo/.pi/sessions/s1", created: "now", modified: "now", messageCount: 2, firstMessage: "hello" }],
+        }],
+      }],
+    });
+  });
+
+  it("rejects a catalog workspace without a session list", () => {
+    expect(() => parseProjectCatalog({
+      projects: [{
+        id: "p1",
+        name: "Repo",
+        path: "/repo",
+        createdAt: "now",
+        workspaces: [{ id: "w1", projectId: "p1", path: "/repo", label: "main", isMain: true, effectiveConfig: {} }],
+      }],
+    })).toThrow("Expected array response");
   });
 
   it("parses workspace effective upload and attachments config without retaining the removed top-level branch alias", () => {

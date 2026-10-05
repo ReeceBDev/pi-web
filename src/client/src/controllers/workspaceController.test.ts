@@ -739,3 +739,101 @@ describe("WorkspaceController.refreshSelectedProjectTopology", () => {
     expect(loadWorkspaces).not.toHaveBeenCalled();
   });
 });
+
+describe("WorkspaceController catalog caches", () => {
+  it("uses the catalog-cached workspace list without refetching", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const loadWorkspaces = vi.fn();
+    const loadSessions = vi.fn().mockResolvedValue([]);
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        workspacesByProjectId: { [repo.id]: [main] },
+      },
+      loadWorkspaces,
+      { loadSessions },
+    );
+
+    await test.controller.selectProject(repo);
+
+    expect(loadWorkspaces).not.toHaveBeenCalled();
+    expect(test.state().selectedProject).toBe(repo);
+    expect(test.state().workspaces).toEqual([main]);
+    expect(test.state().workspacesByProjectId[repo.id]).toEqual([main]);
+  });
+
+  it("falls through to the workspace request when the catalog cache has no entry", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const loadWorkspaces = vi.fn().mockResolvedValue([main]);
+    const loadSessions = vi.fn().mockResolvedValue([]);
+    const test = harness({ selectedMachine: machine("local"), projects: [repo] }, loadWorkspaces, { loadSessions });
+
+    await test.controller.selectProject(repo);
+
+    expect(loadWorkspaces).toHaveBeenCalledWith(repo.id, "local");
+    expect(test.state().workspaces).toEqual([main]);
+  });
+
+  it("uses the catalog-cached session list without refetching", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const cached = session(main.path, "cached-1");
+    const loadSessions = vi.fn();
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        sessionsByWorkspacePath: { [main.path]: [cached] },
+      },
+      vi.fn().mockResolvedValue([main]),
+      { loadSessions },
+    );
+
+    await test.controller.selectWorkspace(main);
+
+    expect(loadSessions).not.toHaveBeenCalled();
+    expect(test.state().selectedWorkspace).toBe(main);
+    expect(test.state().sessions).toEqual([cached]);
+  });
+
+  it("falls through to the sessions request when the catalog cache has no entry", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const remote = session(main.path, "remote-1");
+    const loadSessions = vi.fn().mockResolvedValue([remote]);
+    const test = harness(
+      { selectedMachine: machine("local"), projects: [repo], selectedProject: repo },
+      vi.fn().mockResolvedValue([main]),
+      { loadSessions },
+    );
+
+    await test.controller.selectWorkspace(main);
+
+    expect(loadSessions).toHaveBeenCalledWith(main.path, "local");
+    expect(test.state().sessions).toEqual([remote]);
+  });
+
+  it("drops the closed project's cached workspaces and session lists", () => {
+    const closed = project("p1", "/closed");
+    const remaining = project("p2", "/remaining");
+    const closedWorkspace = workspace(closed.id, closed.path);
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [closed, remaining],
+        workspacesByProjectId: { [closed.id]: [closedWorkspace], [remaining.id]: [workspace(remaining.id, remaining.path)] },
+        sessionsByWorkspacePath: { [closed.path]: [session(closed.path)], [remaining.path]: [] },
+      },
+      vi.fn(),
+    );
+
+    test.controller.forgetProject(closed.id);
+
+    expect(test.state().workspacesByProjectId).toEqual({ [remaining.id]: [workspace(remaining.id, remaining.path)] });
+    expect(test.state().sessionsByWorkspacePath).toEqual({ [remaining.path]: [] });
+  });
+});
