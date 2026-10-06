@@ -48,7 +48,10 @@ function currentNotify(fake: { session: Pick<PiAgentSession, "extensionRunner"> 
 describe("PiSessionService lifecycle, listing, and reload", () => {
   it("starts sessions through an injected runtime creator", async () => {
     const hub = new CapturingSessionEventHub();
-    const fake = fakeRuntime();
+    // Seed the phantom placeholder the real engine holds in memory at creation:
+    // the create response must still report the PERSISTED count (0), or the web
+    // client's cached-new-session lifeline (messageCount === 0) never engages.
+    const fake = fakeRuntime("session-1", { messages: [{ role: "user", content: "" }] });
     let sessionStartText: string | undefined;
     const bindExtensions = fake.session.bindExtensions.bind(fake.session);
     fake.session.bindExtensions = (bindings) => {

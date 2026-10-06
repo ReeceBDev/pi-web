@@ -1609,7 +1609,11 @@ export class PiSessionService implements SessionRouteService {
       persisted: sessionFileExists(session.sessionFile),
       created: new Date().toISOString(),
       modified: new Date().toISOString(),
-      messageCount: session.messages.length,
+      // Persisted count: at creation the engine keeps an unsent placeholder
+      // message only in memory, and clients treat messageCount === 0 as "fresh
+      // session" for their cached-new-session lifeline (the list path in
+      // unpersistedActiveSessions reports 0 for the same session).
+      messageCount: sessionFileExists(session.sessionFile) ? session.messages.length : 0,
       firstMessage: "",
       // Include the parent so listeners can nest the new session in the tree
       // immediately, instead of showing it flat until the next reload.
