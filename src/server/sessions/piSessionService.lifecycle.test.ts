@@ -1190,6 +1190,24 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await service.dispose();
   });
 
+  it("does not list fresh sessions from other working directories", async () => {
+    const fake = fakeRuntime("elsewhere-session");
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.start("/workspace");
+    const sessions = await service.list("/elsewhere");
+
+    expect(sessions).toHaveLength(0);
+
+    await service.dispose();
+  });
+
   it("does not duplicate persisted active sessions in the listing", async () => {
     const fake = fakeRuntime("listed-session");
     const service = new PiSessionService(new CapturingSessionEventHub(), {

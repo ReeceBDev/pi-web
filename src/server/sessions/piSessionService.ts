@@ -1510,6 +1510,7 @@ export class PiSessionService implements SessionRouteService {
       const session = active.runtime.session;
       if (listedSessionIds.has(session.sessionId)) continue;
       if (sessionFileExists(session.sessionFile)) continue;
+      if (canonicalizeStoredCwd(active.runtime.cwd) !== canonicalCwd) continue;
       const created = (this.activeSessionCreatedAt.get(active.runtime) ?? this.now()).toISOString();
       entries.push({
         id: session.sessionId,
