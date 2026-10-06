@@ -1168,6 +1168,28 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await service.dispose();
   });
 
+  it("lists freshly created sessions whose transcript path is pre-allocated but not written", async () => {
+    // Production shape: the engine pre-allocates sessionFile at creation and
+    // writes the file only on the first message (2026-10-06 vanishing-session
+    // regression — the old `sessionFile !== undefined` guard skipped these).
+    const fake = fakeRuntime("preallocated-session");
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.start("/workspace");
+    const sessions = await service.list("/workspace");
+
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({ id: "preallocated-session", cwd: "/workspace", persisted: false, messageCount: 0, firstMessage: "" });
+
+    await service.dispose();
+  });
+
   it("does not duplicate persisted active sessions in the listing", async () => {
     const fake = fakeRuntime("listed-session");
     const service = new PiSessionService(new CapturingSessionEventHub(), {
