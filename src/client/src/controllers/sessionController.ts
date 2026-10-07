@@ -1619,7 +1619,11 @@ export class SessionController {
       return;
     }
 
-    rememberCachedNewSession(session, pending.machineId);
+    // The client authored this session empty moments ago, so it wins over the
+    // server's placeholder count (the engine may pre-allocate the transcript
+    // path and report messageCount != 0); the server listing consumes the
+    // entry once the session truly exists on disk.
+    rememberCachedNewSession({ ...session, messageCount: 0 }, pending.machineId);
     // The temp row's storage entry is superseded by the real session's.
     forgetCachedNewSession(tempId, pending.machineId);
     moveDraft(machineSessionKey(pending.machineId, tempId), machineSessionKey(pending.machineId, session.id));

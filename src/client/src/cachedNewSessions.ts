@@ -6,12 +6,41 @@ const defaultMachineId = "local";
 
 export type CachedNewSessionInfo = SessionInfo & { browserCachedNew: true; machineId: string };
 
+let memoryStorage: Storage | undefined;
+
 function browserStorage(): Storage | undefined {
   try {
     return typeof localStorage === "undefined" ? undefined : localStorage;
   } catch {
-    return undefined;
+    // localStorage blocked (privacy settings) throws on access: keep the fresh-session
+    // lifeline alive in memory for this page view. In-memory only — lost on reload;
+    // the real fix is the user unblocking storage.
+    return (memoryStorage ??= createMemoryStorage());
   }
+}
+
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length(): number {
+      return values.size;
+    },
+    clear(): void {
+      values.clear();
+    },
+    getItem(key: string): string | null {
+      return values.get(key) ?? null;
+    },
+    key(index: number): string | null {
+      return Array.from(values.keys())[index] ?? null;
+    },
+    removeItem(key: string): void {
+      values.delete(key);
+    },
+    setItem(key: string, value: string): void {
+      values.set(key, value);
+    },
+  };
 }
 
 export function rememberCachedNewSession(session: SessionInfo, machineId = defaultMachineId, storage = browserStorage()): void {

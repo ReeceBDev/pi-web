@@ -75,6 +75,23 @@ describe("cached new sessions", () => {
     expect(loadCachedNewSessions(storage)).toEqual([]);
   });
 
+  it("falls back to in-memory storage when localStorage access throws", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    Object.defineProperty(globalThis, "localStorage", { configurable: true, get() { throw new Error("storage blocked"); } });
+    try {
+      rememberCachedNewSession(baseSession);
+
+      expect(loadCachedNewSessions().map((session) => session.id)).toEqual(["session-1"]);
+
+      forgetCachedNewSession("session-1");
+
+      expect(loadCachedNewSessions()).toEqual([]);
+    } finally {
+      if (original) Object.defineProperty(globalThis, "localStorage", original);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    }
+  });
+
   it("keeps browser-cached sessions scoped by machine", () => {
     const storage = new MemoryStorage();
     rememberCachedNewSession(baseSession, "local", storage);

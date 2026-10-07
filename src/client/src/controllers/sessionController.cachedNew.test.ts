@@ -328,6 +328,33 @@ describe("SessionController cached-new sessions", () => {
     expect(loadCachedNewSessions(storage).map((session) => session.id)).toEqual(["started-session"]);
   });
 
+  it("remembers the created session even when the create response reports a placeholder messageCount", async () => {
+    const storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
+    // The engine may pre-allocate the transcript path and report a nonzero
+    // messageCount in the create response; the client authored the session
+    // empty, so the lifeline must still record it.
+    const started: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl", messageCount: 1, firstMessage: "..." };
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([]),
+      startSession: () => Promise.resolve(started),
+      transcriptSnapshot: (session) => Promise.resolve({ page: emptyPage, status: status(sessionLookupId(session)), seq: 0, partial: null }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    await controller.startSession();
+
+    expect(loadCachedNewSessions(storage).map((session) => session.id)).toEqual(["started-session"]);
+  });
+
   it("forgets the pending start row when the start fails", async () => {
     const storage = new MemoryStorage();
     Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
