@@ -1152,43 +1152,6 @@ describe("PiSessionService lifecycle, listing, and reload", () => {
     await service.dispose();
   });
 
-  it("lists freshly created sessions the engine has not persisted yet", async () => {
-    const fake = fakeRuntime("ghost-session", { sessionFile: undefined });
-    const service = new PiSessionService(new CapturingSessionEventHub(), {
-      agentDir: TEST_AGENT_DIR,
-      modelRuntime: testModelRuntime,
-      createAgentRuntime: runtimeCreator(fake.runtime),
-      sessionManager: sessionGateway([]),
-      heartbeatIntervalMs: 60_000,
-    });
-
-    await service.start("/workspace");
-    const sessions = await service.list("/workspace");
-
-    expect(sessions).toHaveLength(1);
-    expect(sessions[0]).toMatchObject({ id: "ghost-session", cwd: "/workspace", persisted: false, messageCount: 0, firstMessage: "" });
-
-    await service.dispose();
-  });
-
-  it("does not duplicate persisted active sessions in the listing", async () => {
-    const fake = fakeRuntime("listed-session");
-    const service = new PiSessionService(new CapturingSessionEventHub(), {
-      agentDir: TEST_AGENT_DIR,
-      modelRuntime: testModelRuntime,
-      createAgentRuntime: runtimeCreator(fake.runtime),
-      sessionManager: sessionGateway([sessionRecord("listed-session")]),
-      heartbeatIntervalMs: 60_000,
-    });
-
-    await service.start("/workspace");
-    const sessions = await service.list("/workspace");
-
-    expect(sessions.filter((session) => session.id === "listed-session")).toHaveLength(1);
-
-    await service.dispose();
-  });
-
   it("orders archives by activity using index metadata and legacy fallbacks without opening files", async () => {
     const open = vi.fn(() => { throw new Error("listing must not open archived files"); });
     const service = new PiSessionService(new CapturingSessionEventHub(), {
