@@ -893,6 +893,7 @@ export class SessionController {
         if (refreshedSelected !== selectedSession) this.setState({ selectedSession: refreshedSelected });
         return;
       }
+      console.info("[vanish3] resume list:", { fetched: fetchedSessions.length, selInList: sessions.some((session) => session.id === selectedSession.id), lifeline: sessions.filter((session) => isCachedNewSessionInfo(session)).length });
       const next = sessions.find((session) => session.archived !== true) ?? sessions[0];
       if (next !== undefined) await this.selectSessionAfterNavigation(next, expected);
       else await this.clearSessionAfterNavigation(expected);

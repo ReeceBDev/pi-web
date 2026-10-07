@@ -35,6 +35,8 @@ export function mergeCachedNewSessions(cwd: string, sessions: SessionInfo[], mac
   const retainedCachedSessions = cachedSessions.filter((session) => session.machineId !== machineId || !sessionIds.has(session.id));
   if (retainedCachedSessions.length !== cachedSessions.length) saveCachedNewSessions(retainedCachedSessions, storage);
   const cached = retainedCachedSessions.filter((session) => session.machineId === machineId && session.cwd === cwd);
+  console.info("[vanish3] lifeline consumed:", cachedSessions.filter((session) => session.machineId === machineId && sessionIds.has(session.id)).map((session) => session.id));
+  console.info("[vanish3] re-added:", cached.map((session) => session.id));
   return [...cached, ...sessions];
 }
 
