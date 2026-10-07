@@ -1482,7 +1482,7 @@ export class PiSessionService implements SessionRouteService {
       this.publishNotificationMutations(this.notificationStore.clearSession(record.sessionId, "archive-reconcile"));
     }
     const unarchivedSessions = sessions.filter((session) => !archivedById.has(session.id)).map(clientSessionFromListEntry);
-    const unpersistedActive = this.unpersistedActiveSessions(cwd, new Set(unarchivedSessions.map((session) => session.id)));
+    const unpersistedActive = this.unpersistedActiveSessions(cwd);
     const reconcilableSessionIds = this.reconcilableSessionIds(cwd, unarchivedSessions.map((session) => session.id), archivedById);
     this.workspaceActivity?.reconcileSessionActivity(cwd, reconcilableSessionIds);
     await this.publishUnreadMutations(this.unreadStore.reconcileCwd(canonicalizeStoredCwd(cwd), reconcilableSessionIds));
@@ -1498,18 +1498,14 @@ export class PiSessionService implements SessionRouteService {
    * transcript file before the first message, so no file-scan entry exists).
    * Without these, a just-created session the user has not submitted to
    * vanishes from every server listing while it is being typed into.
-   * The engine pre-allocates the transcript path at creation, so the
-   * pre-persistence test is file existence, not path presence. Runtimes the
-   * file scan already listed are skipped by id, so the merge never duplicates
-   * a session whose transcript file appeared between the scan and the merge.
    */
-  private unpersistedActiveSessions(cwd: string, listedSessionIds: Set<string>): ClientSession[] {
+  private unpersistedActiveSessions(cwd: string): ClientSession[] {
     const canonicalCwd = canonicalizeStoredCwd(cwd);
     const entries: ClientSession[] = [];
     for (const active of new Set(this.active.values())) {
       const session = active.runtime.session;
-      if (listedSessionIds.has(session.sessionId)) continue;
-      if (sessionFileExists(session.sessionFile)) continue;
+      if (session.sessionFile !== undefined) continue;
+      if (canonicalizeStoredCwd(active.runtime.cwd) !== canonicalCwd) continue;
       const created = (this.activeSessionCreatedAt.get(active.runtime) ?? this.now()).toISOString();
       entries.push({
         id: session.sessionId,
