@@ -390,5 +390,7 @@ describe("publicPushLookup DNS filtering", () => {
     await expect(run(publicPushLookup(fakeResolve), "fcm.googleapis.com")).rejects.toThrow("Push DNS address denied");
     resolvedAddress = "104.18.32.7";
     await expect(run(publicPushLookup(fakeResolve), "fcm.googleapis.com")).resolves.toBe("104.18.32.7");
+    await expect(run(publicPushLookup(fakeResolve), "jmt17.google.com")).resolves.toBe("104.18.32.7");
+    await expect(run(publicPushLookup(fakeResolve), "push.example.test")).rejects.toThrow("Push host denied");
   });
 });

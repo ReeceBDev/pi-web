@@ -12,11 +12,16 @@ export interface PushState {
 export interface PushPersistence { load(): Promise<unknown>; save(state: PushState): Promise<void> }
 
 /** Only these providers are allowed. Validate again at the network boundary. */
+/** FCM also issues jmt<N>.google.com endpoints to current Chrome builds (2025+). */
+export function isPushEndpointHost(hostname: string): boolean {
+  return hostname === "fcm.googleapis.com" || hostname === "updates.push.services.mozilla.com" || /^jmt\d+\.google\.com$/.test(hostname);
+}
+
 export function validatePushEndpoint(value: unknown): string {
   if (typeof value !== "string" || value.length > 2300) throw new Error("Invalid push endpoint");
   const url = new URL(value);
-  const path = url.hostname === "fcm.googleapis.com" ? /^\/(?:fcm\/send|wp)\/([A-Za-z0-9_-]{16,2048})$/
-    : url.hostname === "updates.push.services.mozilla.com" ? /^\/wpush\/v2\/([A-Za-z0-9_-]{16,2048})$/ : undefined;
+  const fcmSend = /^\/(?:fcm\/send|wp)\/([A-Za-z0-9_-]{16,2048})$/;
+  const path = isPushEndpointHost(url.hostname) ? (url.hostname === "updates.push.services.mozilla.com" ? /^\/wpush\/v2\/([A-Za-z0-9_-]{16,2048})$/ : fcmSend) : undefined;
   if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash
     || path?.test(url.pathname) !== true || value !== url.href || /:443(?:\/|$)/.test(value)) {
     throw new Error("Invalid push endpoint");

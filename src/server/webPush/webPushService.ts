@@ -5,7 +5,7 @@ import ipaddr from "ipaddr.js";
 import webPush from "web-push";
 import type { SessionUnreadCatalogSnapshot, SessionUnreadEvent, SessionUnreadSummary } from "../../shared/apiTypes.js";
 import type { SessionEventHub } from "../realtime/sessionEventHub.js";
-import { validatePushSubscription, type PushRecord, type WebPushStore } from "./webPushStore.js";
+import { validatePushSubscription, isPushEndpointHost, type PushRecord, type WebPushStore } from "./webPushStore.js";
 
 export interface PushDeliveryResult { status: number; retryAfter?: string | undefined }
 export type PushSender = (record: PushRecord, payload: string, timeoutMs: number) => Promise<PushDeliveryResult>;
@@ -29,7 +29,7 @@ export interface WebPushDependencies {
 /** Public-only resolution is part of the actual TLS connection, not a preflight. */
 export function publicPushLookup(resolve: typeof lookup = lookup): LookupFunction {
   return (hostname, options, callback) => {
-    if (!["fcm.googleapis.com", "updates.push.services.mozilla.com"].includes(hostname)) { callback(new Error("Push host denied"), "", 4); return; }
+    if (!isPushEndpointHost(hostname)) { callback(new Error("Push host denied"), "", 4); return; }
     let settled = false;
     const finish: typeof callback = (...args) => { if (settled) return; settled = true; clearTimeout(timer); callback(...args); };
     const timer = setTimeout(() => { finish(new Error("Push DNS timeout"), "", 4); }, 2000);
