@@ -236,23 +236,24 @@ describe("PiSessionService notification suppression", () => {
     it("cancels only the session the user cancelled", async () => {
       const spoolDir = await tempWakeSpool();
       const clock: TestClock = { nowMs: Date.now() };
-      const first = fakeRuntime("cancelled-aaaa");
-      const second = fakeRuntime("running-bbbb");
+      // Same first 8 characters prove cancel suppression uses full session ids.
+      const first = fakeRuntime("samepref-first");
+      const second = fakeRuntime("samepref-other");
       const { service } = buildService(spoolDir, [first, second], clock);
       try {
-        await service.status(sessionRef("cancelled-aaaa"));
-        await service.status(sessionRef("running-bbbb"));
+        await service.status(sessionRef("samepref-first"));
+        await service.status(sessionRef("samepref-other"));
         for (const fake of [first, second]) {
           fake.session.isStreaming = true;
           fake.emit({ type: "agent_start" });
         }
-        await service.abort(sessionRef("cancelled-aaaa"));
+        await service.abort(sessionRef("samepref-first"));
 
         for (const fake of [first, second]) {
           fake.session.isStreaming = false;
           fake.emit({ type: "agent_end" });
         }
-        expect(await notifiedSessionIds(service)).toEqual(["running-bbbb"]);
+        expect(await notifiedSessionIds(service)).toEqual(["samepref-other"]);
       } finally {
         await service.dispose();
       }
@@ -267,6 +268,7 @@ describe("PiSessionService notification suppression", () => {
         await service.status(sessionRef("session-1"));
         fake.session.isStreaming = true;
         fake.emit({ type: "agent_start" });
+        fake.emit({ type: "tool_execution_end", toolCallId: "tool-1", toolName: "example", result: {}, isError: true });
         fake.session.isStreaming = false;
         fake.emit({ type: "agent_end" });
 
