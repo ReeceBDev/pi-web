@@ -20,7 +20,7 @@ export function isPushEndpointHost(hostname: string): boolean {
 export function validatePushEndpoint(value: unknown): string {
   if (typeof value !== "string" || value.length > 2300) throw new Error("Invalid push endpoint");
   const url = new URL(value);
-  const fcmSend = /^\/(?:fcm\/send|wp)\/([A-Za-z0-9_-]{16,2048})$/;
+  const fcmSend = /^\/(?:fcm\/send|wp)\/(?=.{16,2048}$)[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?$/;
   const path = isPushEndpointHost(url.hostname) ? (url.hostname === "updates.push.services.mozilla.com" ? /^\/wpush\/v2\/([A-Za-z0-9_-]{16,2048})$/ : fcmSend) : undefined;
   if (url.protocol !== "https:" || url.username || url.password || url.port || url.search || url.hash
     || path?.test(url.pathname) !== true || value !== url.href || /:443(?:\/|$)/.test(value)) {

@@ -32,7 +32,8 @@ describe("validatePushEndpoint", () => {
   });
 
   it("accepts the jmt<N>.google.com FCM endpoints current Chrome issues", () => {
-    expect(validatePushEndpoint("https://jmt17.google.com/fcm/send/AAAABBBBCCCCDDDD")).toBe("https://jmt17.google.com/fcm/send/AAAABBBBCCCCDDDD");
+    const endpoint = "https://jmt17.google.com/fcm/send/eGb5NMukXYg:APA91bEEmNwwbdyUH_xfk-1ZcPO1_QhTKxqnh023n4KUgXKuP7cKfZ1-pXQ22wOh7o6F5kVt3Zz8oLpPhejO16qwd9XrJx03LVu0kF2O-ZpI2x5K_3Fm2QBxRL2dO8xIrTA8jXchRcZ5";
+    expect(validatePushEndpoint(endpoint)).toBe(endpoint);
     expect(validatePushEndpoint("https://jmt1.google.com/wp/tok_1234567890abcdef")).toBeTruthy();
   });
 
@@ -49,6 +50,7 @@ describe("validatePushEndpoint", () => {
     ["jmt host without digits", "https://jmt.google.com/fcm/send/AAAABBBBCCCCDDDD"],
     ["jmt host on another TLD", "https://jmt17.google.com.evil.test/fcm/send/AAAABBBBCCCCDDDD"],
     ["jmt host wrong path", "https://jmt17.google.com/other/AAAABBBBCCCCDDDD"],
+    ["multiple FCM token separators", "https://jmt17.google.com/fcm/send/AAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBB:CCCCCCCCCCCCCCCC"],
     ["unknown host", "https://push.example.test/fcm/send/AAAABBBBCCCCDDDD"],
     ["wrong FCM path", "https://fcm.googleapis.com/other/AAAABBBBCCCCDDDD"],
     ["wrong Mozilla host path", "https://updates.push.services.mozilla.com/fcm/send/AAAABBBBCCCCDDDD"],
