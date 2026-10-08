@@ -2,6 +2,7 @@ import { css, html, LitElement, type PropertyValues, type TemplateResult } from 
 import { customElement, property, state } from "lit/decorators.js";
 import { DEFAULT_WORKSPACE_ATTACHMENTS_FOLDER, DEFAULT_WORKSPACE_UPLOADS_FOLDER, type PiWebConfigEnvOverrides, type PiWebConfigResponse, type PiWebConfigValues } from "../../api";
 import "./SettingsPanelFrame";
+import "./SettingsNativePush";
 import type { SettingsNotice } from "./SettingsPanelFrame";
 import {
   emptyGatewayServerConfigDraft,
@@ -61,6 +62,7 @@ export class SettingsGeneralPanel extends LitElement {
       >
         <div class="settings-sections">
           ${this.renderGatewayServerSettings()}
+          <settings-native-push></settings-native-push>
           ${this.renderSelectedMachineAccessSettings()}
         </div>
       </settings-panel-frame>

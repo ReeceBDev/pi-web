@@ -1491,6 +1491,7 @@ function parsePiWebConfigValues(value: unknown): PiWebConfigValues {
     ...optionalField("host", optionalString(record, "host")),
     ...optionalField("port", optionalNumber(record, "port")),
     ...optionalField("allowedHosts", optionalAllowedHosts(record["allowedHosts"])),
+    ...optionalField("webPush", record["webPush"] === undefined ? undefined : { publicBaseUrl: requireString(requireRecord(record["webPush"]), "publicBaseUrl") }),
     ...optionalField("shortcuts", optionalShortcuts(record["shortcuts"])),
     ...optionalField("plugins", optionalPlugins(record["plugins"])),
     ...optionalField("pathAccess", optionalPathAccess(record["pathAccess"])),
