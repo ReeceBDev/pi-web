@@ -1,4 +1,5 @@
-import { statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
@@ -117,6 +118,10 @@ export interface PiSessionLogger {
 
 const noopLogger: PiSessionLogger = { info() { /* no-op */ } };
 const DEFAULT_UNREAD_PUBLICATION_RETRY_MS = 1_000;
+/** How long a wake-spool parked/unparked answer is reused before rescanning. */
+const WAKE_SPOOL_CACHE_TTL_MS = 5_000;
+/** Default wake-extension spool holding `pending/` waiter files. */
+const DEFAULT_WAKE_SPOOL_DIR = join(homedir(), ".framework", "wake");
 /**
  * User-facing names for the two phases of session startup PI WEB can prove it
  * is inside: it awaits exactly one call for each, so the phase is a fact rather
@@ -1124,6 +1129,13 @@ export interface PiSessionServiceDependencies {
   notificationStore?: SessionNotificationStore;
   /** Durable daemon-owned unread state; defaults to an in-memory store in tests. */
   unreadStore?: SessionUnreadStore;
+  /**
+   * Wake-extension spool directory whose `pending/` holds waiter files named
+   * `...-{first 8 chars of a session id}.json`. A session with a waiter there
+   * is suppressed from completion notifications until the waiter is consumed.
+   * Defaults to `~/.framework/wake`.
+   */
+  wakeSpoolDir?: string;
   /** Initial retry delay for durable unread publication failures. */
   unreadPublicationRetryDelayMs?: number;
   /**
@@ -1236,6 +1248,15 @@ export class PiSessionService implements SessionRouteService {
   private unreadPublicationRetryTimer: NodeJS.Timeout | undefined;
   private unreadPublicationRetryDelayMs: number;
   private unreadPublicationStopped = false;
+  private readonly wakeSpoolDir: string;
+  /**
+   * Per-session notification quiet flag: set by abort() before the unwind can
+   * record a completion, cleared by the session's next agent_start. Strictly
+   * per session — never a global gate.
+   */
+  private readonly userCancelledQuiet = new Map<string, true>();
+  /** Per-session cached wake-spool scan answers, so event churn is not a readdir storm. */
+  private readonly wakeParkedCache = new Map<string, { at: number; parked: boolean }>();
 
   constructor(private readonly events: SessionEventHub, deps: PiSessionServiceDependencies) {
     this.archiveStore = deps.archiveStore ?? new SessionArchiveStore();
@@ -1251,6 +1272,7 @@ export class PiSessionService implements SessionRouteService {
     });
     this.notificationStore = deps.notificationStore ?? new SessionNotificationStore();
     this.unreadStore = deps.unreadStore ?? new SessionUnreadStore();
+    this.wakeSpoolDir = deps.wakeSpoolDir ?? DEFAULT_WAKE_SPOOL_DIR;
     this.onUnreadChanged = deps.onUnreadChanged;
     this.pendingAskStore = deps.pendingAskStore ?? new PendingAskStore();
     this.pendingExtensionDialogStore = deps.pendingExtensionDialogStore ?? new PendingExtensionDialogStore();
@@ -3357,6 +3379,10 @@ export class PiSessionService implements SessionRouteService {
     if (active === undefined) return;
     const sessionId = active.runtime.session.sessionId;
     this.clearCompactionPromptQueue(sessionId);
+    // Arm the quiet flag before the unwind: the agent_end the abort triggers
+    // must not record an unread completion. Cleared by this session's next
+    // agent_start; error-failed turns and stop()/close paths never set it.
+    this.userCancelledQuiet.set(sessionId, true);
     clearSessionQueue(active.runtime.session);
     // Settle run-scoped dialogs now, at abort-request time: pi's agent loop
     // waits for a parked `tool_call` dialog handler before it can emit
@@ -4033,10 +4059,46 @@ export class PiSessionService implements SessionRouteService {
     const mutations = this.unreadStore.observeActivityState(
       session.sessionId,
       canonicalizeStoredCwd(session.sessionManager.getCwd()),
-      this.hasActiveWork(session),
+      // Suppressed sessions stay "active" for unread bookkeeping only: the
+      // missing completion is what silences the ding and the push. Status
+      // display and hasActiveWork() are untouched.
+      this.hasActiveWork(session) || this.isNotificationSuppressed(session),
     );
     if (mutations.length === 0) return;
     void this.publishUnreadMutations(mutations).catch(() => undefined);
+  }
+
+  /**
+   * True when this session's next completion must stay silent: a pending wake
+   * waiter, or a user abort still unwinding. Both conditions are strictly per
+   * session; status display never consults them.
+   */
+  private isNotificationSuppressed(session: PiAgentSession): boolean {
+    return this.userCancelledQuiet.has(session.sessionId) || this.isWakeParked(session.sessionId);
+  }
+
+  /** A waiter file named `...-{first 8 id chars}.json` in the spool parks this session. */
+  private isWakeParked(sessionId: string): boolean {
+    const at = this.now().getTime();
+    const cached = this.wakeParkedCache.get(sessionId);
+    if (cached !== undefined && at - cached.at < WAKE_SPOOL_CACHE_TTL_MS) return cached.parked;
+    const parked = this.scanWakeSpoolForWaiter(sessionId);
+    this.wakeParkedCache.set(sessionId, { at, parked });
+    return parked;
+  }
+
+  private scanWakeSpoolForWaiter(sessionId: string): boolean {
+    const suffix = `-${sessionId.slice(0, 8)}.json`;
+    try {
+      return readdirSync(join(this.wakeSpoolDir, "pending")).some((name) => name.endsWith(suffix));
+    } catch (error: unknown) {
+      // A missing pending dir is the ordinary not-parked case; any other read
+      // failure is logged and treated as unparked too. Never throw from here.
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+        this.logger.info({ err: error }, "Could not read wake spool pending dir; treating session as unparked");
+      }
+      return false;
+    }
   }
 
   private publishUnreadMutations(mutations: readonly SessionUnreadMutation[]): Promise<void> {
@@ -4473,7 +4535,12 @@ export class PiSessionService implements SessionRouteService {
   private publishActivityForEvent(session: PiAgentSession, event: unknown): void {
     const eventType = getString(event, "type");
     if (eventType === undefined) return;
-    if (eventType === "agent_start") { this.publishActivity(session, "agent running", "active"); return; }
+    if (eventType === "agent_start") {
+      // A user abort's quiet flag dies here: the session is working again.
+      this.userCancelledQuiet.delete(session.sessionId);
+      this.publishActivity(session, "agent running", "active");
+      return;
+    }
     if (eventType === "agent_end") {
       this.publishActivity(session, "idle", "idle");
       setTimeout(() => {
