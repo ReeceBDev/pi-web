@@ -222,6 +222,7 @@ export function savePiWebConfig(config: PiWebConfig, options: LoadOptions = {}):
   delete existing["host"];
   delete existing["port"];
   delete existing["allowedHosts"];
+  delete existing["webPush"];
   delete existing["shortcuts"];
   delete existing["plugins"];
   delete existing["pathAccess"];
@@ -252,6 +253,7 @@ function piWebConfigRecord(config: PiWebConfig): Record<string, unknown> {
     ...(config.host !== undefined ? { host: config.host } : {}),
     ...(config.port !== undefined ? { port: config.port } : {}),
     ...(config.allowedHosts !== undefined ? { allowedHosts: config.allowedHosts } : {}),
+    ...(config.webPush !== undefined ? { webPush: config.webPush } : {}),
     ...(config.shortcuts !== undefined ? { shortcuts: config.shortcuts } : {}),
     ...(config.plugins !== undefined ? { plugins: config.plugins } : {}),
     ...(config.pathAccess !== undefined ? { pathAccess: config.pathAccess } : {}),
@@ -271,6 +273,7 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["host"] !== undefined ? { host: parseString(value["host"], "host", path) } : {}),
     ...(value["port"] !== undefined ? { port: parsePort(value["port"], "port", path) } : {}),
     ...(value["allowedHosts"] !== undefined ? { allowedHosts: parseAllowedHosts(value["allowedHosts"], path) } : {}),
+    ...(value["webPush"] !== undefined ? { webPush: parseWebPushConfig(value["webPush"]) } : {}),
     ...(value["shortcuts"] !== undefined ? { shortcuts: parseShortcuts(value["shortcuts"], path) } : {}),
     ...(value["plugins"] !== undefined ? { plugins: parsePlugins(value["plugins"], path) } : {}),
     ...(value["pathAccess"] !== undefined ? { pathAccess: parsePathAccessConfig(value["pathAccess"], path) } : {}),
@@ -284,6 +287,18 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["extensionDialogsTimeoutMs"] !== undefined ? { extensionDialogsTimeoutMs: parseExtensionDialogsTimeoutMs(value["extensionDialogsTimeoutMs"], path) } : {}),
     ...(value["agent"] !== undefined ? { agent: parseAgentConfig(value["agent"], path) } : {}),
   };
+}
+
+export function parseWebPushConfig(value: unknown): NonNullable<PiWebConfig["webPush"]> {
+  if (!isRecord(value) || typeof value["publicBaseUrl"] !== "string") throw new Error("Web push requires publicBaseUrl");
+  const source = value["publicBaseUrl"];
+  const url = new URL(source);
+  if (url.protocol !== "https:" || url.port || url.username || url.password || url.search || url.hash
+    || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z][a-z0-9-]*$/.test(url.hostname)
+    || !/^\/[A-Za-z0-9/_~-]*\/$|^\/$/.test(url.pathname) || source !== url.href || /:443(?:\/|$)/.test(source)) {
+    throw new Error("Web push publicBaseUrl must be a canonical HTTPS DNS URL with a trailing slash and no port");
+  }
+  return { publicBaseUrl: source };
 }
 
 function parseMaxUploadBytes(value: unknown, key: string, path = "environment"): number {

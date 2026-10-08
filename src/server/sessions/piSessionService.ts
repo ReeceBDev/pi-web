@@ -1327,6 +1327,14 @@ export class PiSessionService implements SessionRouteService {
     await this.publishUnreadMutations(this.unreadStore.reconcileWorkspaces(cwds));
   }
 
+  /** Native question/dialog state is reliable; arbitrary extension pauses have no shared native flag. */
+  mayNotifyCompletion(sessionId: string, cwd: string): boolean {
+    if (this.pendingAskStore.pendingAsk(sessionId) !== undefined) return false;
+    if (this.pendingExtensionDialogStore.pendingDialogs(sessionId).length > 0) return false;
+    const active = this.active.get(sessionId);
+    return active === undefined || (cwdPathsEqual(active.runtime.session.sessionManager.getCwd(), cwd) && !this.hasActiveWork(active.runtime.session));
+  }
+
   async unreadCatalog(): Promise<SessionUnreadCatalogSnapshot> {
     await this.publishUnreadMutations([]);
     return this.unreadStore.durableCatalogSnapshot();

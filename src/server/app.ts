@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOptions } from "fastify";
 import fastifyCompress from "@fastify/compress";
 import fastifyStatic from "@fastify/static";
+import { registerWebPushProxyRoutes } from "./webPush/webPushRoutes.js";
 import fastifyWebsocket from "@fastify/websocket";
 import { ProjectStore } from "./storage/projectStore.js";
 import { ProjectService } from "./projects/projectService.js";
@@ -275,6 +276,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerLocalProjectRoutes(app, projects, workspaces, "/api", { config: configService, sessionDaemon });
   registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService, sessionDaemon });
 
+  registerWebPushProxyRoutes(app, sessionDaemon, async () => (await readConfig()).webPush?.publicBaseUrl);
   registerSessionProxyRoutes(app, sessionDaemon);
   registerSessionProxyRoutes(app, sessionDaemon, "/api/machines/local");
   registerPairedPluginBackendProxyRoutes(app, sessionDaemon);
@@ -302,6 +304,11 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
       // notably index.html, keeps the default revalidating policy.
       setHeaders: (res, filePath) => {
         if (filePath.startsWith(hashedAssetsDir)) res.header("cache-control", "public, max-age=31536000, immutable");
+        if (filePath === join(clientDist, "native-push-sw.js")) {
+          res.header("content-type", "application/javascript; charset=utf-8");
+          res.header("cache-control", "no-store");
+          res.header("x-content-type-options", "nosniff");
+        }
       },
     });
     const deploymentFlavor = deps.deploymentFlavor ?? createDeploymentFlavorResolver(

@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { mkdir, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { FileWebPushPersistence, WebPushStore } from "./webPush/webPushStore.js";
+import { WebPushService } from "./webPush/webPushService.js";
+import { registerWebPushRoutes } from "./webPush/webPushRoutes.js";
+import { cwdPathsEqual } from "./workingDirectory.js";
 import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
 import { WorkspaceActivityService } from "./activity/workspaceActivityService.js";
@@ -213,6 +217,7 @@ async function createSessionDaemonRuntime() {
   });
   let sessionsForFailedConstruction: PiSessionService | undefined;
   let projectLifecycleForFailedConstruction: ProjectLifecycleService | undefined;
+  let nativePush: WebPushService | undefined;
   try {
     const notificationStore = new SessionNotificationStore();
     const unreadStore = new SessionUnreadStore({
@@ -221,7 +226,31 @@ async function createSessionDaemonRuntime() {
         app.log.error({ err: error, operation }, "session unread persistence failed");
       },
     });
+    const pushStore = config.webPush === undefined ? undefined : new WebPushStore(new FileWebPushPersistence(join(piWebDataDir(daemonEnvironment), "web-push")));
+    if (pushStore !== undefined) {
+      try { await pushStore.load(); } catch { throw new Error("Native push state could not be loaded; inspect private state before restarting"); }
+    }
+    const sessionManager = createPiSessionManagerGateway({ agentDir: activeAgentProfile.dir, env: daemonEnvironment });
     await unreadStore.load();
+    if (pushStore !== undefined && config.webPush !== undefined) {
+      nativePush = new WebPushService({
+        store: pushStore,
+        baseUrl: config.webPush.publicBaseUrl,
+        isCurrent: (event) => {
+          const current = unreadStore.catalogSnapshot();
+          return current.catalogId === event.catalogId && current.sessions.some((summary) => summary.sessionId === event.sessionId && summary.cwd === event.cwd && summary.completionOrder === event.unread?.completionOrder);
+        },
+        mayNotify: (summary) => sessions.mayNotifyCompletion(summary.sessionId, summary.cwd),
+        resolveChat: async (summary) => {
+          const exactSession = await sessionManager.resolveSessionFile(summary.cwd, summary.sessionId);
+          if (exactSession?.id !== summary.sessionId || !cwdPathsEqual(exactSession.cwd, summary.cwd)) return undefined;
+          statusAttribution.invalidate();
+          return statusAttribution.attributeExact(summary.cwd);
+        },
+        report: (reason) => { app.log.warn({ component: "native-push", reason }, "native push delivery diagnostic"); },
+      });
+      nativePush.attach(eventHub, unreadStore.catalogSnapshot());
+    }
     // Activity and status are mutually dependent by design: the record notifies
     // the projection, the projection reads the record. The notification runs
     // long after both are constructed.
@@ -316,10 +345,7 @@ async function createSessionDaemonRuntime() {
         if (hasNewCompletion) projectLifecycle.scheduleCleanup();
       },
       catalogRefreshStatus: catalogRefresher,
-      sessionManager: createPiSessionManagerGateway({
-        agentDir: activeAgentProfile.dir,
-        env: daemonEnvironment,
-      }),
+      sessionManager,
     }));
     sessionsForFailedConstruction = sessions;
     auth.subscribe((change) => { sessions.applyAuthChange(change); });
@@ -370,6 +396,7 @@ async function createSessionDaemonRuntime() {
     const shutdown = async (): Promise<void> => {
       if (disposed) return;
       disposed = true;
+      nativePush?.dispose();
       await runSessionDaemonShutdown({
         logger: app.log,
         dependencies: {
@@ -395,8 +422,9 @@ async function createSessionDaemonRuntime() {
       await stateOwnership.release();
     };
     projectLifecycle.scheduleCleanup(); // One delayed pass for existing persisted unread, if any.
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, shutdown };
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, pushStore, nativePush, shutdown };
   } catch (error) {
+    nativePush?.dispose();
     await projectLifecycleForFailedConstruction?.closeAll();
     try {
       await serverPlugins.stop();
@@ -412,7 +440,8 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, pushStore, nativePush }: SessionDaemonRuntime): void {
+  if (pushStore !== undefined && nativePush !== undefined) registerWebPushRoutes(app, pushStore, nativePush);
   registerProjectMutationRoutes(app, projectLifecycle);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);

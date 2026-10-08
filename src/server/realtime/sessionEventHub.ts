@@ -1,4 +1,4 @@
-import type { GlobalSessionEvent, RealtimeEvent, SessionNotificationSummaryEvent, SessionUiEvent } from "../../shared/apiTypes.js";
+import type { GlobalSessionEvent, RealtimeEvent, SessionNotificationSummaryEvent, SessionUiEvent, SessionUnreadEvent } from "../../shared/apiTypes.js";
 import { projectBrowserSessionEvent } from "../browserMessageProjection.js";
 import { SESSION_MEDIA_MODE } from "../../shared/sessionMedia.js";
 import { SessionMediaIndex, type SessionMediaScope } from "../sessions/sessionMediaIndex.js";
@@ -16,6 +16,7 @@ export class SessionEventHub {
   private readonly globalSockets = new Set<RealtimeSocket>();
   private readonly seqBySession = new Map<string, number>();
   private globalJoinFrame: (() => RealtimeEvent) | undefined;
+  private readonly unreadSubscribers = new Set<(event: SessionUnreadEvent) => void>();
 
   /** The service and routes use this same owned index; service disposal clears it. */
   constructor(readonly mediaIndex = new SessionMediaIndex()) {}
@@ -73,7 +74,18 @@ export class SessionEventHub {
     return this.seqBySession.get(sessionId) ?? 0;
   }
 
+  /** Internal typed signal; callers publish only after unread persistence succeeds. */
+  subscribeUnread(listener: (event: SessionUnreadEvent) => void | Promise<void>, onFailure: () => void = () => undefined): () => void {
+    const guarded = (event: SessionUnreadEvent) => {
+      const report = () => { try { onFailure(); } catch { /* Reporting must not block other subscribers. */ } };
+      try { void Promise.resolve(listener(event)).catch(report); } catch { report(); }
+    };
+    this.unreadSubscribers.add(guarded);
+    return () => { this.unreadSubscribers.delete(guarded); };
+  }
+
   publishGlobal(event: GlobalSessionEvent): void {
+    if (event.type === "sessions.unread") for (const listener of this.unreadSubscribers) listener(event);
     this.publishRealtime(event);
   }
 

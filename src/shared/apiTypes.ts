@@ -160,6 +160,8 @@ export interface PiWebConfigValues {
   host?: string;
   port?: number;
   allowedHosts?: string[] | true;
+  /** Local-machine native push; canonical public HTTPS app URL including its base path. */
+  webPush?: { publicBaseUrl: string };
   shortcuts?: PiWebShortcutConfig;
   plugins?: PiWebPluginConfigMap;
   /** External filesystem roots PI WEB may expose outside a workspace. */

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { loadPiWebConfig, parseAgentConfig, parseAttachmentsConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
+import { loadPiWebConfig, parseWebPushConfig, parseAgentConfig, parseAttachmentsConfig, parseUploadsConfig, resolveEffectivePiWebConfig, savePiWebConfig, type AgentPathHost, type LoadOptions, type PiWebConfig } from "../config.js";
 import type { PiWebConfigEnvOverrides, PiWebConfigResponse, PiWebConfigValues } from "../shared/apiTypes.js";
 import { isPiWebPluginId } from "../shared/pluginIds.js";
 
@@ -123,6 +123,7 @@ export function parsePiWebConfigResponseBody(value: unknown, source = "PI WEB co
 function parseConfigRequest(value: unknown, agentPathHost: AgentPathHost = "current"): PiWebConfig {
   if (!isRecord(value)) throw new Error("PI WEB config update must include a config object");
   const config: PiWebConfig = {};
+  if (value["webPush"] !== undefined) config.webPush = parseWebPushConfig(value["webPush"]);
   const host = value["host"];
   const port = value["port"];
   const allowedHosts = value["allowedHosts"];

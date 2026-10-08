@@ -88,6 +88,13 @@ export class CachedWorkspaceAttribution implements WorkspaceAttribution {
     return attributions;
   }
 
+  /** Chat links require one exact canonical workspace, never a descendant guess. */
+  async attributeExact(cwd: string): Promise<CwdAttribution | undefined> {
+    const canonical = canonicalizeStoredCwd(cwd);
+    const matches = (await this.topology()).filter((workspace) => workspace.path === canonical);
+    return matches.length === 1 ? matches[0]?.attribution : undefined;
+  }
+
   invalidate(): void {
     this.cache = undefined;
   }
