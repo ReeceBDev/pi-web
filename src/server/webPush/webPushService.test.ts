@@ -1,10 +1,12 @@
 import { createECDH, createDecipheriv, hkdfSync, randomBytes } from "node:crypto";
+import { lookup } from "node:dns";
+import type { LookupFunction } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
 import type { SessionUnreadEvent, SessionUnreadSummary } from "../../shared/apiTypes.js";
 import { SessionEventHub } from "../realtime/sessionEventHub.js";
 import { WebPushStore } from "./webPushStore.js";
-import { createPushSender, WebPushService, type PushDeliveryResult, type PushSender } from "./webPushService.js";
+import { createPushSender, publicPushLookup, WebPushService, type PushDeliveryResult, type PushSender } from "./webPushService.js";
 
 const BASE_URL = "https://pi.example.test/pi-web/";
 
@@ -372,5 +374,21 @@ describe("createPushSender encryption", () => {
     expect(JSON.parse(plaintext)).toEqual({ title: "PI WEB", body: "A session update is ready." });
     expect(details.endpoint).toBe(fixture.endpoint);
     expect(createPushSender).toBeDefined();
+  });
+});
+
+describe("publicPushLookup DNS filtering", () => {
+  it("rejects a bogus resolved address and passes a public unicast address for an allowlisted push host", async () => {
+    let resolvedAddress = "127.0.0.1";
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- structural test double for the overloaded node:dns lookup boundary.
+    const fakeResolve = ((hostname: string, options: unknown, callback: (error: Error | null, addresses: { address: string; family: number }[]) => void) => {
+      callback(null, [{ address: resolvedAddress, family: resolvedAddress.includes(":") ? 6 : 4 }]);
+    }) as unknown as typeof lookup;
+    const run = (instance: LookupFunction, hostname: string) => new Promise((resolveDone, rejectDone) => {
+      instance(hostname, { family: 4 }, (error, address) => { if (error !== null) rejectDone(error); else resolveDone(address); });
+    });
+    await expect(run(publicPushLookup(fakeResolve), "fcm.googleapis.com")).rejects.toThrow("Push DNS address denied");
+    resolvedAddress = "104.18.32.7";
+    await expect(run(publicPushLookup(fakeResolve), "fcm.googleapis.com")).resolves.toBe("104.18.32.7");
   });
 });

@@ -185,6 +185,7 @@ Rows with JSON key `—` are runtime-only environment variables, not config-file
 | Agent can post question forms | `askUser` | `PI_WEB_ASK_USER` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Extension dialog auto-cancel timeout | `extensionDialogsTimeoutMs` | — | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | Session environment facts | `environmentFacts` | `PI_WEB_ENVIRONMENT_FACTS` | Global/session daemon | Not supported locally | Restart session daemon on that machine |
+| Android Web Push base URL | `webPush.publicBaseUrl` | — | Global/session daemon | Not supported locally | Restart session daemon on that machine |
 | PI WEB plugin desired enablement/settings | `plugins.<id>.enabled`, `plugins.<id>.settings` | — | Global + sessiond startup snapshot for server entries | Not core local config; plugins may read their own project files | Browser-only: reload tab. Server-backed: manually restart sessiond, then reload tab |
 | Server-plugin safe start | `serverPlugins.safeStart` | — | Global/offline recovery | Not supported locally; manage with `pi-web plugins safe-start ...` | Applied before discovery/import on next sessiond start |
 | Keyboard shortcuts | `shortcuts.<actionId>` | — | Global | Not supported locally | Applies after settings save/config refresh |
@@ -353,6 +354,12 @@ Trust is resolved the way `pi` resolves it with no trust prompt to show:
 - Otherwise the agent's `defaultProjectTrust` setting decides: `always` loads the project resources, and `never` skips them. `ask` skips them too, because PI WEB has no browser trust prompt yet and a non-interactive `pi` also treats `ask` as untrusted.
 
 This mirrors the Pi CLI: with `defaultProjectTrust: "never"`, an opened workspace's `.pi/` extensions and packages are ignored rather than loaded silently.
+
+### Android Web Push
+
+`webPush.publicBaseUrl` enables native Android Web Push delivery for the session daemon on that machine. Set it to the public HTTPS DNS name browsers use to reach this PI WEB instance, as a canonical HTTPS URL with a trailing slash — no port, no IP address (for example `https://pi.example.com/pi-web/`). The session daemon reads the value once at startup, so changing it requires a session-daemon restart on that machine.
+
+Notifications use generic text only — title `PI WEB` and body `A session update is ready.` plus a link to the chat view — never workspace paths or other session details.
 
 ### Session daemon tools
 
