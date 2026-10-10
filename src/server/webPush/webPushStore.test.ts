@@ -162,7 +162,8 @@ describe("WebPushStore", () => {
     const duplicates = new WebPushStore({ load: () => Promise.resolve({ version: 1, vapid, subscriptions: [record, record] }), save: () => Promise.resolve() });
     await expect(duplicates.load()).rejects.toThrow("Corrupt");
     const badGeneration = new WebPushStore({ load: () => Promise.resolve({ version: 1, vapid, subscriptions: [{ ...record, generation: "not-a-uuid" }] }), save: () => Promise.resolve() });
-    await expect(badGeneration.load()).rejects.toThrow("Corrupt");
+    await badGeneration.load();
+    expect(badGeneration.snapshot().subscriptions).toHaveLength(0);
   });
 
   it("rejects a VAPID keypair that does not match", async () => {
@@ -177,18 +178,26 @@ describe("WebPushStore", () => {
     await expect(store.load()).rejects.toThrow("Corrupt");
   });
 
-  it("surfaces invalid subscriptions persisted in state", async () => {
+  it("drops invalid subscriptions persisted in state and keeps valid ones", async () => {
     const pair = createECDH("prime256v1");
     pair.generateKeys();
-    const store = new WebPushStore({
-      load: () => Promise.resolve({
-        version: 1,
-        vapid: { publicKey: pair.getPublicKey().toString("base64url"), privateKey: pair.getPrivateKey().toString("base64url") },
-        subscriptions: [{ subscription: { endpoint: "https://attacker.test/x", keys: { p256dh: "AA", auth: "AA" } }, generation: "00000000-0000-4000-8000-000000000000" }],
-      }),
-      save: () => Promise.resolve(),
-    });
-    await expect(store.load()).rejects.toThrow();
+    const vapid = { publicKey: pair.getPublicKey().toString("base64url"), privateKey: pair.getPrivateKey().toString("base64url") };
+    const load = (subscriptions: unknown) => new WebPushStore({ load: () => Promise.resolve({ version: 1, vapid, subscriptions }), save: () => Promise.resolve() });
+    const legacy = load([
+      { subscription: { endpoint: "https://attacker.test/x", keys: { p256dh: "AA", auth: "AA" } }, generation: "00000000-0000-4000-8000-000000000000" },
+    ]);
+    await legacy.load();
+    expect(legacy.snapshot().subscriptions).toHaveLength(0);
+    // Mixed state: a current fcm.googleapis.com endpoint plus a legacy jmt17.google.com one.
+    const fixture = subscriptionFixture();
+    const mixed = load([
+      { subscription: { endpoint: fixture.endpoint, keys: fixture.keys }, generation: "00000000-0000-4000-8000-000000000000" },
+      { subscription: { endpoint: "https://jmt17.google.com/fcm/send/legacyendpointvalue12345", keys: fixture.keys }, generation: "00000000-0000-4000-8000-000000000001" },
+    ]);
+    await mixed.load();
+    const catalog = mixed.snapshot();
+    expect(catalog.vapid).toEqual(vapid);
+    expect(catalog.subscriptions.map((entry) => entry.subscription.endpoint)).toEqual([fixture.endpoint]);
   });
 });
 

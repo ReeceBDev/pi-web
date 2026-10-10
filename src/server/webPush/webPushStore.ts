@@ -55,15 +55,18 @@ export class WebPushStore {
       await this.persistence.save(state);
       this.state = state;
     } else {
-      // Invalid JSON, keys or records fail startup, never silently discard registrations.
+      // Invalid JSON or VAPID keys fail startup; invalid subscription records are dropped instead.
       if (!isRecord(value) || value["version"] !== 1 || !isRecord(value["vapid"]) || !Array.isArray(value["subscriptions"]) || value["subscriptions"].length > 20) throw new Error("Corrupt web push state");
       const publicKey = decodeKey(value["vapid"]["publicKey"], 65);
       const privateKey = decodeKey(value["vapid"]["privateKey"], 32);
       const pair = createECDH("prime256v1"); pair.setPrivateKey(privateKey);
       if (!pair.getPublicKey().equals(publicKey)) throw new Error("Corrupt web push state");
-      const subscriptions = value["subscriptions"].map((record: unknown): PushRecord => {
-        if (!isRecord(record) || typeof record["generation"] !== "string" || !/^[a-f0-9-]{36}$/.test(record["generation"])) throw new Error("Corrupt web push state");
-        return { subscription: validatePushSubscription(record["subscription"]), generation: record["generation"] };
+      // Stale or invalid subscriptions are dropped at load: they must never fail startup.
+      const subscriptions = value["subscriptions"].flatMap((record: unknown): PushRecord[] => {
+        try {
+          if (!isRecord(record) || typeof record["generation"] !== "string" || !/^[a-f0-9-]{36}$/.test(record["generation"])) return [];
+          return [{ subscription: validatePushSubscription(record["subscription"]), generation: record["generation"] }];
+        } catch { return []; }
       });
       if (new Set(subscriptions.map(({ subscription }) => subscription.endpoint)).size !== subscriptions.length) throw new Error("Corrupt web push state");
       this.state = { version: 1, vapid: { publicKey: publicKey.toString("base64url"), privateKey: privateKey.toString("base64url") }, subscriptions };
