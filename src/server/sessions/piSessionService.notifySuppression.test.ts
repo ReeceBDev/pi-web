@@ -7,6 +7,7 @@ import {
   CapturingSessionEventHub,
   emptyArchiveStore,
   fakeRuntime,
+  fakeSessionManager,
   sessionGateway,
   sessionRecord,
   sessionRef,
@@ -34,11 +35,17 @@ async function tempWakeSpool(): Promise<string> {
   return dir;
 }
 
-/** Drop a wake waiter for `sessionId` into the spool's pending dir. */
+/** Drop a wake waiter whose JSON `session` field names `sessionId` into the spool's pending dir. */
 async function parkSession(spoolDir: string, sessionId: string): Promise<void> {
   const pending = join(spoolDir, "pending");
   await mkdir(pending, { recursive: true });
-  await writeFile(join(pending, `repo-ab12cd34-${sessionId.slice(0, 8)}.json`), "{}", "utf8");
+  await writeFile(join(pending, `repo-ab12cd34-${sessionId.slice(0, 8)}.json`), JSON.stringify({ session: sessionId }), "utf8");
+}
+
+/** Global unread-completion events: one per recorded completion — the ding/push trigger. */
+function unreadCompletions(hub: CapturingSessionEventHub): { sessionId: string }[] {
+  return hub.globalEvents.flatMap((event) =>
+    event.type === "sessions.unread" && event.unread !== null ? [{ sessionId: event.sessionId }] : []);
 }
 
 function buildService(spoolDir: string, fakes: ReturnType<typeof fakeRuntime>[], clock: TestClock) {
@@ -187,6 +194,107 @@ describe("PiSessionService notification suppression", () => {
         await service.status(sessionRef("session-1"));
         completeRuntimeWork(fake);
         expect(await notifiedSessionIds(service)).toEqual(["session-1"]);
+      } finally {
+        await service.dispose();
+      }
+    });
+
+    it("matches the waiter's full session id, so same-prefix sessions do not suppress each other", async () => {
+      // Both ids share the 8-char filename suffix; only the JSON `session` field decides.
+      const spoolDir = await tempWakeSpool();
+      await parkSession(spoolDir, "dup1234-alpha");
+      const clock: TestClock = { nowMs: Date.now() };
+      const alpha = fakeRuntime("dup1234-alpha");
+      const beta = fakeRuntime("dup1234-beta");
+      const { service } = buildService(spoolDir, [alpha, beta], clock);
+      try {
+        await service.status(sessionRef("dup1234-alpha"));
+        await service.status(sessionRef("dup1234-beta"));
+        completeRuntimeWork(alpha);
+        completeRuntimeWork(beta);
+        expect(await notifiedSessionIds(service)).toEqual(["dup1234-beta"]);
+      } finally {
+        await service.dispose();
+      }
+    });
+
+    it("sees a waiter parked after the previous scan because agent_start invalidates the cache", async () => {
+      const spoolDir = await tempWakeSpool();
+      const clock: TestClock = { nowMs: Date.now() };
+      const fake = fakeRuntime("session-1");
+      const { service, hub } = buildService(spoolDir, [fake], clock);
+      try {
+        await service.status(sessionRef("session-1"));
+        completeRuntimeWork(fake); // caches a negative scan result
+        expect(await notifiedSessionIds(service)).toEqual(["session-1"]);
+
+        await parkSession(spoolDir, "session-1"); // parked between turns
+        completeRuntimeWork(fake); // agent_start drops the stale negative; turn end stays silent
+        expect(unreadCompletions(hub)).toEqual([{ sessionId: "session-1" }]);
+      } finally {
+        await service.dispose();
+      }
+    });
+  });
+
+  describe("parent with working tracked children stays silent", () => {
+    function buildSubsessionService(spoolDir: string, clock: TestClock) {
+      const parent = fakeRuntime("parent-1");
+      const childA = fakeRuntime("child-a-1", { sessionManager: fakeSessionManager("/workspace") });
+      const childB = fakeRuntime("child-b-2", { sessionManager: fakeSessionManager("/workspace") });
+      const bystander = fakeRuntime("bystander-1");
+      // Children stay streaming after their spawn prompt: still WORKING.
+      for (const child of [childA, childB]) {
+        child.session.prompt = () => {
+          child.session.isStreaming = true;
+          child.emit({ type: "agent_start" });
+          return Promise.resolve();
+        };
+      }
+      const runtimes = [parent.runtime, childA.runtime, childB.runtime, bystander.runtime];
+      let index = 0;
+      const createAgentRuntime: RuntimeCreator = () => Promise.resolve(runtimes[index++] ?? bystander.runtime);
+      const hub = new CapturingSessionEventHub();
+      const service = new PiSessionService(hub, {
+        agentDir: TEST_AGENT_DIR,
+        modelRuntime: testModelRuntime,
+        createAgentRuntime,
+        sessionManager: sessionGateway([sessionRecord("bystander-1")]),
+        archiveStore: emptyArchiveStore(),
+        spawnTargets: { resolveSpawnTarget: () => Promise.resolve({ allowed: true, cwd: "/workspace" }) },
+        heartbeatIntervalMs: 60_000,
+        unreadStore: new SessionUnreadStore(),
+        wakeSpoolDir: spoolDir,
+        now: () => new Date(clock.nowMs),
+      });
+      return { service, hub, parent, childA, childB, bystander };
+    }
+
+    it("silences the parent while any child works and notifies once after the last child resolves", async () => {
+      const spoolDir = await tempWakeSpool();
+      const clock: TestClock = { nowMs: Date.now() };
+      const { service, hub, parent, childA, childB, bystander } = buildSubsessionService(spoolDir, clock);
+      try {
+        await service.start("/workspace");
+        const spawn = { spawningCwd: "/workspace", parentSessionId: "parent-1", parentSessionFile: "/tmp/parent-1.jsonl", prompt: "work" };
+        await service.spawnSubsession(spawn);
+        await service.spawnSubsession(spawn);
+        await service.status(sessionRef("bystander-1"));
+
+        completeRuntimeWork(bystander); // unrelated session notifies normally
+        completeRuntimeWork(parent); // both children WORKING → parent silent
+        expect(await notifiedSessionIds(service)).toEqual(["bystander-1"]);
+
+        childA.session.isStreaming = false;
+        childA.emit({ type: "turn_end" }); // one child resolves; the other still WORKING
+        completeRuntimeWork(parent);
+        expect(await notifiedSessionIds(service)).toEqual(["bystander-1"]);
+
+        childB.session.isStreaming = false;
+        childB.emit({ type: "turn_end" }); // last child resolves
+        await new Promise((resolve) => setTimeout(resolve, 0)); // delivery observes the parent
+        expect(unreadCompletions(hub).filter((completion) => completion.sessionId === "parent-1")).toHaveLength(1);
+        expect((await notifiedSessionIds(service)).sort()).toEqual(["bystander-1", "parent-1"]);
       } finally {
         await service.dispose();
       }

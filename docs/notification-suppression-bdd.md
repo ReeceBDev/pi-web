@@ -144,11 +144,22 @@ Implementation notes as built (deltas from the pre-implementation sketch):
   injected test clock past the TTL before the turn ends. In production the
   wake's completion typically lands more than one heartbeat after the file is
   consumed, so the delay is not observable there.
+- Matcher as built: the 8-char filename suffix only narrows candidates; the
+  waiter JSON's `session` field must equal the full session id, so sessions
+  sharing a filename prefix never suppress each other.
+- The per-session wake-scan cache is invalidated on that session's
+  `agent_start`, so a waiter parked after the previous turn's negative scan is
+  seen before the new turn completes.
+- A parent session with any WORKING tracked child is suppressed the same way
+  (third condition in `isNotificationSuppressed`); the final completion after
+  the last child resolves notifies exactly once.
+- `pw-run-done` has no emitter: only `pw-unread-ding`, fired on catalog
+  completions, drives sound. Suppressing the unread record therefore silences
+  both the sound and the push.
 
-Test-session ids must differ within their first 8 characters: the waiter
-matcher is the `-{first 8 chars}.json` suffix, so two test ids sharing a
-prefix (`session-1` / `session-2`) would park each other. The per-session
-scenarios use distinct prefixes.
+Test-session ids may share their first 8 characters: the matcher is the
+waiter JSON's full-id `session` field, and the filename suffix only narrows
+the candidate files. The per-session scenarios still use distinct ids.
 
 Manual acceptance on the live box after deploy (once, not automated):
 register a wait in a scratch session and confirm no ping; press Stop mid-run

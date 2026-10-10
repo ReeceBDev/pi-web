@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
@@ -1131,8 +1131,8 @@ export interface PiSessionServiceDependencies {
   unreadStore?: SessionUnreadStore;
   /**
    * Wake-extension spool directory whose `pending/` holds waiter files named
-   * `...-{first 8 chars of a session id}.json`. A session with a waiter there
-   * is suppressed from completion notifications until the waiter is consumed.
+   * `...-{first 8 chars of a session id}.json`. The JSON `session` field must
+   * exactly match before that waiter suppresses completion notifications.
    * Defaults to `~/.framework/wake`.
    */
   wakeSpoolDir?: string;
@@ -4074,10 +4074,12 @@ export class PiSessionService implements SessionRouteService {
    * session; status display never consults them.
    */
   private isNotificationSuppressed(session: PiAgentSession): boolean {
-    return this.userCancelledQuiet.has(session.sessionId) || this.isWakeParked(session.sessionId);
+    return this.userCancelledQuiet.has(session.sessionId)
+      || this.workingSubsessionIds(session.sessionId).length > 0
+      || this.isWakeParked(session.sessionId);
   }
 
-  /** A waiter file named `...-{first 8 id chars}.json` in the spool parks this session. */
+  /** A waiter filename narrows candidates; its JSON session id decides the exact match. */
   private isWakeParked(sessionId: string): boolean {
     const at = this.now().getTime();
     const cached = this.wakeParkedCache.get(sessionId);
@@ -4088,9 +4090,17 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private scanWakeSpoolForWaiter(sessionId: string): boolean {
+    const pendingDir = join(this.wakeSpoolDir, "pending");
     const suffix = `-${sessionId.slice(0, 8)}.json`;
     try {
-      return readdirSync(join(this.wakeSpoolDir, "pending")).some((name) => name.endsWith(suffix));
+      return readdirSync(pendingDir).some((name) => {
+        if (!name.endsWith(suffix)) return false;
+        try {
+          return getString(JSON.parse(readFileSync(join(pendingDir, name), "utf8")), "session") === sessionId;
+        } catch {
+          return false;
+        }
+      });
     } catch (error: unknown) {
       // A missing pending dir is the ordinary not-parked case; any other read
       // failure is logged and treated as unparked too. Never throw from here.
@@ -4536,6 +4546,8 @@ export class PiSessionService implements SessionRouteService {
     const eventType = getString(event, "type");
     if (eventType === undefined) return;
     if (eventType === "agent_start") {
+      // A turn can create its waiter after an idle negative scan; force the next scan to see it.
+      this.wakeParkedCache.delete(session.sessionId);
       // A user abort's quiet flag dies here: the session is working again.
       this.userCancelledQuiet.delete(session.sessionId);
       this.publishActivity(session, "agent running", "active");
