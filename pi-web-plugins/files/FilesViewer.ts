@@ -2,7 +2,6 @@ import type { ContentRendererOption, ContentRenderingCapability, FileContentResp
 import { css, html, LitElement, type PropertyValues, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
-import { ifDefined } from "lit/directives/if-defined.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderWorkspaceMarkdownHtml } from "./workspaceMarkdown";
 import { DEFAULT_WORKSPACE_FILE_VIEW_MODE, workspaceFileViewModeStore, type WorkspaceFileViewMode, type WorkspaceFileViewModeStore } from "./workspaceFileViewMode";
@@ -56,6 +55,7 @@ export class WorkspaceFileViewer extends LitElement {
    */
   private selectionToken = 0;
   private failedPreviewToken: number | undefined;
+  private htmlPreview: { key: string; urls: { frame: string; open: string } } | undefined;
   private customPreview: TemplateResult | undefined;
   private rendererId: string | undefined;
   private preference: WorkspaceFileViewMode | undefined;
@@ -109,7 +109,7 @@ export class WorkspaceFileViewer extends LitElement {
     if (!this.rendererOptions.some(({ id }) => id === this.rendererId)) {
       this.rendererId = this.rendererOptions[0]?.id;
     }
-    this.mode = this.preference ?? (this.rendererOptions.find(({ id }) => id === this.rendererId)?.renderMode === "automatic" ? "preview" : DEFAULT_WORKSPACE_FILE_VIEW_MODE);
+    this.mode = this.preference ?? defaultViewModeFor(file, this.rendererOptions.find(({ id }) => id === this.rendererId)?.renderMode === "automatic");
     this.customPreview = eligible
       ? this.contentRendering?.renderText({ ...request, controls: "external", allowManualPreview: this.preference === "preview", ...(this.rendererId === undefined ? {} : { rendererId: this.rendererId }) })
       : undefined;
@@ -149,7 +149,7 @@ export class WorkspaceFileViewer extends LitElement {
           ${canOpen ? html`
             <a
               class="viewer-action"
-              href=${openUrl}
+              href=${workspaceFilePreviewKind(file) === "html" ? this.htmlPreviewUrls(file).open : openUrl}
               target="_blank"
               rel="noopener noreferrer"
               referrerpolicy="no-referrer"
@@ -238,20 +238,72 @@ export class WorkspaceFileViewer extends LitElement {
   private renderFramePreview(file: FileContentResponse, kind: "html" | "pdf", token: number): TemplateResult {
     if (file.size > this.maxInlinePreviewBytes) return this.renderPreviewTooLarge(file);
     if (this.failedPreviewToken === token) return this.renderPreviewFailure(file, token);
-    const src = this.previewUrl(file);
+    if (kind === "html") {
+      const { frame } = this.htmlPreviewUrls(file);
+      return html`
+        ${file.truncated ? html`<p class="preview-note" role="status">Preview is rendered from truncated source. Use Download for the complete file.</p>` : null}
+        <iframe
+          class="file-frame-preview"
+          src=${frame}
+          sandbox="allow-scripts"
+          allow=""
+          referrerpolicy="no-referrer"
+          title=${`Preview of ${file.path}`}
+          @error=${() => { this.recordPreviewFailure(token); }}
+        ></iframe>
+      `;
+    }
 
     return html`
-      ${kind === "pdf" ? html`<p class="preview-note" role="status">Inline PDF support varies by browser. Use Open ↗ or Download above if the document does not appear.</p>` : null}
+      <p class="preview-note" role="status">Inline PDF support varies by browser. Use Open ↗ or Download above if the document does not appear.</p>
       <iframe
         class="file-frame-preview"
-        src=${src}
-        sandbox=${ifDefined(framePreviewSandbox(kind))}
+        src=${this.previewUrl(file)}
         allow=""
         referrerpolicy="no-referrer"
         title=${`Preview of ${file.path}`}
         @error=${() => { this.recordPreviewFailure(token); }}
       ></iframe>
     `;
+  }
+
+  /**
+   * Blob URLs for the live HTML preview, cached per selection and revoked when
+   * the selection or the element goes away. `file.content` is authoritative
+   * here: inline HTML reads always carry the source text.
+   *
+   * The frame blob keeps the document in an opaque origin (`sandbox="allow-scripts"`
+   * without `allow-same-origin`): script and CDN assets run, but the document
+   * cannot read the PI WEB origin — fetches are CORS-denied and there are no
+   * credentials to attach. Relative sibling files are the known ceiling (there
+   * is no base URL in an opaque-origin blob); serve multi-file pages through a
+   * dedicated same-site file origin if that ever matters.
+   */
+  private htmlPreviewUrls(file: FileContentResponse): { frame: string; open: string } {
+    const key = this.activeFileKey ?? "";
+    if (this.htmlPreview?.key === key) return this.htmlPreview.urls;
+    this.revokeHtmlPreview();
+    const bytes = new TextEncoder().encode(file.content);
+    const frame = URL.createObjectURL(new Blob([bytes], { type: "text/html" }));
+    // Top-level blob documents inherit the app origin, so the standalone
+    // window wraps the live document in its own opaque-origin sandbox; the
+    // wrapper itself carries no script.
+    const wrapper = `<!doctype html><meta charset="utf-8"><title>${escapeHtml(workspaceFileName(file.path))}</title><style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style><iframe sandbox="allow-scripts" src="${frame}" title="${escapeHtml(file.path)}"></iframe>`;
+    const open = URL.createObjectURL(new Blob([wrapper], { type: "text/html" }));
+    this.htmlPreview = { key, urls: { frame, open } };
+    return this.htmlPreview.urls;
+  }
+
+  private revokeHtmlPreview(): void {
+    if (this.htmlPreview === undefined) return;
+    URL.revokeObjectURL(this.htmlPreview.urls.frame);
+    URL.revokeObjectURL(this.htmlPreview.urls.open);
+    this.htmlPreview = undefined;
+  }
+
+  override disconnectedCallback(): void {
+    this.revokeHtmlPreview();
+    super.disconnectedCallback();
   }
 
   private renderPreviewFailure(file: FileContentResponse, token: number): TemplateResult {
@@ -405,25 +457,36 @@ function hasRawAndPreviewModes(file: FileContentResponse, kind: WorkspaceFilePre
 }
 
 /**
- * HTML previews stay fully sandboxed: opaque origin, no scripts, no forms, no
- * navigation, matching the server's `sandbox` CSP.
+ * PDF previews intentionally carry no sandbox attribute. Sandboxed frames
+ * refuse native PDF handlers — Chromium renders nothing (crbug.com/41131921,
+ * whatwg/html#3958) and Firefox 134+ downloads the file instead of displaying
+ * it (bugzilla 1724924, 1941725) — so a sandboxed frame produces a blank pane
+ * or a surprise download rather than a preview. The isolation that matters
+ * for PDF is the response contract: the server sends `application/pdf` with
+ * `X-Content-Type-Options: nosniff` and a `default-src 'none'` CSP, so those
+ * bytes can only reach the browser's PDF handler, can never be interpreted as
+ * an active same-origin document, and cannot load subresources or run script
+ * in the PI WEB origin. `allow=""` and `referrerpolicy="no-referrer"` still
+ * deny delegated capabilities and referrer leakage, and a persistent
+ * Open/Download affordance covers browsers that decline to display PDFs
+ * inline at all.
  *
- * PDF previews intentionally carry no sandbox attribute (`undefined` omits it).
- * Sandboxed frames refuse native PDF handlers — Chromium renders nothing
- * (crbug.com/41131921, whatwg/html#3958) and Firefox 134+ downloads the file
- * instead of displaying it (bugzilla 1724924, 1941725) — so a sandboxed frame
- * produces a blank pane or a surprise download rather than a preview. The
- * isolation that matters for PDF is the response contract: the server sends
- * `application/pdf` with `X-Content-Type-Options: nosniff` and a
- * `default-src 'none'` CSP, so those bytes can only reach the browser's PDF
- * handler, can never be interpreted as an active same-origin document, and
- * cannot load subresources or run script in the PI WEB origin. `allow=""` and
- * `referrerpolicy="no-referrer"` still deny delegated capabilities and referrer
- * leakage, and a persistent Open/Download affordance covers browsers that
- * decline to display PDFs inline at all.
+ * HTML no longer flows through the server preview URL at all: it renders from
+ * a blob URL in an `allow-scripts` opaque-origin frame (see `htmlPreviewUrls`).
  */
-function framePreviewSandbox(kind: "html" | "pdf"): string | undefined {
-  return kind === "html" ? "" : undefined;
+
+/**
+ * Default view mode when no deep link or stored preference applies: HTML
+ * renders live; everything else stays raw until asked, except code files
+ * whose content renderer renders automatically.
+ */
+export function defaultViewModeFor(file: FileContentResponse, automaticRenderer = false): WorkspaceFileViewMode {
+  return workspaceFilePreviewKind(file) === "html" || automaticRenderer ? "preview" : DEFAULT_WORKSPACE_FILE_VIEW_MODE;
+}
+
+/** Minimal attribute-safe escaping for the wrapper document's static markup. */
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/gu, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch);
 }
 
 function isBrowserPreviewKind(kind: WorkspaceFilePreviewKind): kind is "image" | "html" | "pdf" {

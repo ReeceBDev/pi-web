@@ -242,47 +242,45 @@ describe("workspace-file-viewer", () => {
     expect(viewer.shadowRoot?.querySelector("a, iframe, pi-web-files-code-viewer")).toBeNull();
   });
 
-  it("opens HTML as literal raw source and previews it in an exactly sandboxed frame on request", async () => {
-    const source = `<h1 onclick="alert(1)">Literal heading</h1><script>alert("no")</script>`;
+  it("opens HTML as a live sandboxed preview by default and falls back to raw source on request", async () => {
+    const source = `<h1 onclick="alert(1)">Literal heading</h1><script>alert("yes")</script>`;
     const file = textFile("pages/report.html", source, {
       mediaType: "html",
       mimeType: "text/html; charset=utf-8",
       language: "html",
     });
-    const viewer = await mountViewer(file);
+    const viewer = await mountViewer(file, { modeStore: fakeModeStore(undefined) });
 
+    // No remembered preference: HTML defaults to the live preview.
     const group = requiredElement(viewer.shadowRoot?.querySelector("[role='group']"), "mode group");
     expect(group.getAttribute("aria-label")).toBe("View pages/report.html");
-    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
-    expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("false");
-    expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
-    expect(requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("pi-web-files-code-viewer"), "raw code viewer").content).toBe(source);
-    expect(viewer.shadowRoot?.querySelector("h1, script")).toBeNull();
-
-    const open = anchorWithText(viewer, "Open ↗");
-    expect(open.getAttribute("target")).toBe("_blank");
-    expect(open.getAttribute("rel")).toBe("noopener noreferrer");
-    expect(open.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(new URL(open.href).searchParams.get("download")).toBeNull();
-    const download = requiredElement(viewer.shadowRoot?.querySelector<HTMLAnchorElement>("a[download]"), "download action");
-    expect(download.getAttribute("download")).toBe("report.html");
-    expect(new URL(download.href).searchParams.get("download")).toBe("1");
-
-    modeButton(viewer, "Preview").click();
-    await viewer.updateComplete;
-
     expect(modeButton(viewer, "Preview").getAttribute("aria-pressed")).toBe("true");
+    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("false");
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).toBeNull();
     const frame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "HTML preview frame");
-    expect(frame.getAttribute("sandbox")).toBe("");
+    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("src")?.startsWith("blob:")).toBe(true);
     expect(frame.getAttribute("allow")).toBe("");
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(frame.getAttribute("title")).toBe("Preview of pages/report.html");
 
+    // The standalone window hands the same document a wrapper blob, not the
+    // server preview URL whose CSP would kill scripts.
+    const open = anchorWithText(viewer, "Open ↗");
+    expect(open.getAttribute("target")).toBe("_blank");
+    expect(open.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(open.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(open.href.startsWith("blob:")).toBe(true);
+    const download = requiredElement(viewer.shadowRoot?.querySelector<HTMLAnchorElement>("a[download]"), "download action");
+    expect(download.getAttribute("download")).toBe("report.html");
+    expect(new URL(download.href).searchParams.get("download")).toBe("1");
+
     modeButton(viewer, "Raw").click();
     await viewer.updateComplete;
+    expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("true");
     expect(viewer.shadowRoot?.querySelector("iframe")).toBeNull();
-    expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).not.toBeNull();
+    expect(requiredElement(viewer.shadowRoot?.querySelector<HTMLElement & { content: string }>("pi-web-files-code-viewer"), "raw code viewer").content).toBe(source);
+    expect(viewer.shadowRoot?.querySelector("h1, script")).toBeNull();
   });
 
   it("opens Markdown as literal raw source and renders it through the safe renderer on request", async () => {
@@ -489,7 +487,7 @@ describe("workspace-file-viewer", () => {
 
   it("keeps empty, oversized, unsupported, and truncated states explicit", async () => {
     const emptyMarkdown = textFile("empty.md", "", { mediaType: "markdown", language: "markdown", size: 0 });
-    const viewer = await mountViewer(emptyMarkdown);
+    const viewer = await mountViewer(emptyMarkdown, { modeStore: fakeModeStore("raw") });
     expect(statusMessage(viewer)).toBe("This file is empty.");
     expect(modeButton(viewer, "Preview")).toBeDefined();
     expect(viewer.shadowRoot?.querySelector("a[download]")).not.toBeNull();
@@ -579,10 +577,11 @@ interface FakeModeStore extends WorkspaceFileViewModeStore {
   published: WorkspaceFileViewMode[];
 }
 
-function fakeModeStore(adopted: WorkspaceFileViewMode = "raw"): FakeModeStore {
+function fakeModeStore(adopted?: WorkspaceFileViewMode): FakeModeStore {
   const published: WorkspaceFileViewMode[] = [];
   return {
     published,
+    // No argument = virgin storage: nothing remembered, per-kind defaults apply.
     adopt: () => adopted,
     publish: (mode) => { published.push(mode); },
   };
