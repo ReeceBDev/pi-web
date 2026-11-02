@@ -61,6 +61,7 @@ export class TerminalPanel extends LitElement {
   @state() private softKeysEnabled = initialTerminalSoftKeysEnabled();
   @state() private copySnapshot: TerminalCopySnapshot | undefined;
   @state() private copyStatus: string | undefined;
+  @state() private htmlOpenError: string | undefined;
 
   private terminal: Terminal | undefined;
   private fitAddon: FitAddon | undefined;
@@ -791,12 +792,13 @@ export class TerminalPanel extends LitElement {
   }
 
   /**
-   * Makes workspace HTML file paths printed in the scrollback clickable: they
-   * open the file in the Files panel, which renders HTML live by default.
-   * ponytail: single-line matches only — paths wrapped across terminal rows
-   * will not linkify; multi-line join if that ever matters. Relative paths are
-   * deliberately excluded: the browser cannot know the terminal's cwd, and
-   * bare-name matching would hit URLs and noise.
+   * Makes HTML file paths printed in the scrollback clickable: workspace files
+   * open in the Files panel (live HTML preview), out-of-workspace files open in
+   * a new tab via the local-html-file endpoint. ponytail: single-line matches
+   * only — paths wrapped across terminal rows will not linkify; multi-line join
+   * if that ever matters. Bare/relative names resolve against the workspace
+   * root, assuming the shell cwd is the workspace root — a click after `cd`
+   * elsewhere resolves wrong.
    */
   private createWorkspaceFileLinkProvider(): ILinkProvider {
     return {
@@ -827,30 +829,65 @@ export class TerminalPanel extends LitElement {
     };
   }
 
-  private openWorkspaceHtmlFile(absolutePath: string): void {
+  private openWorkspaceHtmlFile(printedPath: string): void {
     const context = this.context;
     if (context === undefined) return;
     const root = trimTrailingSlashes(context.workspace.path);
     if (root === "") return;
-    // ponytail: home derived from root (root is always /home/<user>/<ws> on this box).
-    const home = root.split("/").slice(0, 4).join("/");
-    const resolved = absolutePath.startsWith("~") ? home + absolutePath.slice(1) : absolutePath;
-    if (!resolved.startsWith(`${root}/`)) return;
-    // Same bubbling event chat links use; the host resolves it into a Files
-    // panel deep link. No listener is bound when the machine or workspace does
-    // not match, in which case nothing happens.
-    this.dispatchEvent(new CustomEvent("workspace-file-open", {
-      detail: {
-        machineId: context.machine.id,
-        projectId: context.workspace.projectId,
-        workspaceId: context.workspace.id,
-        root,
-        path: resolved.slice(root.length + 1),
-      },
-      bubbles: true,
-      composed: true,
-      cancelable: true,
-    }));
+    // ponytail: home derived from root — its parent dir (/home/<user> on this box).
+    const home = root.slice(0, root.lastIndexOf("/"));
+    const resolved = printedPath.startsWith("~")
+      ? normalizePathSegments(home + printedPath.slice(1))
+      : printedPath.startsWith("/")
+        ? normalizePathSegments(printedPath)
+        // Bare/relative names (`chef.html`, `sub/foo.html`) resolve against the
+        // workspace root — assumes the shell cwd is the workspace root.
+        : normalizePathSegments(`${root}/${printedPath}`);
+    if (resolved.startsWith(`${root}/`)) {
+      // Same bubbling event chat links use; the host resolves it into a Files
+      // panel deep link. No listener is bound when the machine or workspace does
+      // not match, in which case nothing happens.
+      this.dispatchEvent(new CustomEvent("workspace-file-open", {
+        detail: {
+          machineId: context.machine.id,
+          projectId: context.workspace.projectId,
+          workspaceId: context.workspace.id,
+          root,
+          path: resolved.slice(root.length + 1),
+        },
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }));
+      return;
+    }
+    void this.openLocalHtmlFile(resolved);
+  }
+
+  /** Fetches an out-of-workspace HTML file through the terminal peer (the
+   * home-confined read runs on the terminal's machine) and opens it in a new
+   * tab: a script-free wrapper page embedding the document in an opaque-origin
+   * `sandbox="allow-scripts"` frame (a top-level blob document would inherit
+   * the app origin), same approach as the Files viewer's Open ↗. ponytail: blob
+   * URLs are never revoked — a small leak per click; revoke after the tab
+   * signals load if it ever matters.
+   */
+  private async openLocalHtmlFile(absolutePath: string): Promise<void> {
+    const name = absolutePath.slice(absolutePath.lastIndexOf("/") + 1) || absolutePath;
+    try {
+      const peer = this.context?.peer;
+      if (peer === undefined) throw new Error("Terminal peer is unavailable");
+      const result = await new TerminalPeerClient(peer).readLocalHtml(absolutePath);
+      if (!result.ok || result.content === undefined) throw new Error(result.error ?? "read failed");
+      const source = result.content;
+      const frame = URL.createObjectURL(new Blob([new TextEncoder().encode(source)], { type: "text/html" }));
+      const wrapper = `<!doctype html><meta charset="utf-8"><title>${escapeHtml(name)}</title><style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style><iframe sandbox="allow-scripts" src="${frame}" title="${escapeHtml(name)}"></iframe>`;
+      const tab = URL.createObjectURL(new Blob([wrapper], { type: "text/html" }));
+      window.open(tab, "_blank", "noopener");
+      this.htmlOpenError = undefined;
+    } catch (error) {
+      this.htmlOpenError = `Could not open ${name}: ${errorMessage(error)}`;
+    }
   }
 
   private disposeTerminalView(): void {
@@ -1106,6 +1143,7 @@ export class TerminalPanel extends LitElement {
         </div>
         ${this.error === undefined ? null : html`<p class="error">${this.error}</p>`}
         ${this.connectionError === undefined ? null : html`<p class="error">${this.connectionError}</p>`}
+        ${this.htmlOpenError === undefined ? null : html`<p class="error">${this.htmlOpenError}</p>`}
         ${this.renderCommandRunNotice()}
         ${this.renderTerminalAccessoryBar()}
         ${this.loading ? html`<p class="muted">Loading terminals…</p>` : null}
@@ -1218,21 +1256,33 @@ function commandRunCompletionLabel(run: TerminalCommandRun): string {
 }
 
 /**
- * Matches absolute paths under `root` ending in .html/.htm within a line of
- * terminal text. `~/<rest>.html?` and `~.html?` tilde forms are also matched
- * (match text stays the tilde form; the link handler resolves `~` to home).
- * Returns matches in order with their 0-based character index.
- * ponytail: single-line, absolute-under-root only (see link provider).
+ * Matches HTML file paths within a line of terminal text: absolute paths under
+ * `root` or under the machine home (derived from `root`, `~` expands to it),
+ * tilde forms (match text stays the tilde form; the link handler resolves it),
+ * and bare/relative names like `chef.html` or `sub/foo.html` — what `ls`
+ * prints; the link handler resolves those against the workspace root. Returns
+ * matches in order with their 0-based character index; matches fully contained
+ * in a longer match are dropped so one path yields one link, not two.
+ * ponytail: single-line only (see link provider); O(n²) containment check —
+ * lines are short, a sweep if profiling ever says otherwise.
  */
 export function matchWorkspaceHtmlPaths(lineText: string, root: string): { path: string; index: number }[] {
   const trimmedRoot = trimTrailingSlashes(root);
   if (trimmedRoot === "" || lineText === "") return [];
   const body = "[^\\s`'\"<>{}\\[\\](),;]+?";
-  const escapedRoot = trimmedRoot.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const escape = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  // ponytail: home derived from root — its parent dir (/home/<user> on this box).
+  const home = trimmedRoot.slice(0, trimmedRoot.lastIndexOf("/"));
+  // Bare/relative names: never start on `/` (absolute patterns own those),
+  // never on `~` (the tilde pattern owns those), and exclude `:` so URL
+  // fragments like `https://x/a.html` never match.
+  const bareBody = "[^\\s:`'\"<>{}\\[\\](),;]+?";
   const patterns = [
-    new RegExp(escapedRoot + "/" + body + "\\.html?\\b", "giu"),
+    new RegExp(escape(trimmedRoot) + "/" + body + "\\.html?\\b", "giu"),
     // `~` expands to the machine home directory.
     new RegExp("~(?:/" + body + ")?\\.html?\\b", "giu"),
+    new RegExp(escape(home) + "/" + body + "\\.html?\\b", "giu"),
+    new RegExp("(?<![\\w/~.-])(?![/~])" + bareBody + "\\.html?\\b", "giu"),
   ];
   const matches: { path: string; index: number }[] = [];
   for (const pattern of patterns) {
@@ -1240,7 +1290,27 @@ export function matchWorkspaceHtmlPaths(lineText: string, root: string): { path:
       matches.push({ path: match[0], index: match.index });
     }
   }
-  return matches.sort((a, b) => a.index - b.index);
+  matches.sort((a, b) => a.index - b.index || b.path.length - a.path.length);
+  return matches.filter((candidate, position) => !matches.some((other, otherPosition) =>
+    otherPosition < position
+    && other.index <= candidate.index
+    && other.index + other.path.length >= candidate.index + candidate.path.length,
+  ));
+}
+
+/** Collapses `.` and `..` in an absolute POSIX path (clamped at `/`). */
+function normalizePathSegments(path: string): string {
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") segments.pop();
+    else segments.push(segment);
+  }
+  return `/${segments.join("/")}`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll("\"", "&quot;");
 }
 
 function trimTrailingSlashes(path: string): string {

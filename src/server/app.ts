@@ -17,6 +17,7 @@ import { SessionDaemonClient } from "../sessiond/sessionDaemonClient.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
 import { registerSessionProxyRoutes, type SessionProxyDaemon } from "./sessiond/sessionProxyRoutes.js";
 import { registerWorkspaceExplorerRoutes } from "./workspaceExplorerRoutes.js";
+import { registerLocalHtmlFileRoutes } from "./localHtmlFileRoutes.js";
 import { registerProjectTrustRoutes } from "./projectTrustRoutes.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaces/workspaceDeletionRoutes.js";
 import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
@@ -283,6 +284,8 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerPluginBackendChannelProxyRoutes(app, sessionDaemon);
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api", { config: configService });
   registerWorkspaceExplorerRoutes(app, projects, workspaces, "/api/machines/local", { config: configService });
+  registerLocalHtmlFileRoutes(app);
+  registerLocalHtmlFileRoutes(app, "/api/machines/local");
   const projectTrustDeps = {
     agentDir: async () => (await requireActiveAgentProfile(agentProfileProvider)).dir,
   };

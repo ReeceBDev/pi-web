@@ -880,6 +880,60 @@ async function callAsyncPanelMethod(panel: TerminalPanel, name: string, ...args:
   await callPanelMethod(panel, name, ...args);
 }
 
+describe("openWorkspaceHtmlFile routing", () => {
+  it("opens out-of-workspace html via the peer read without dispatching workspace-file-open", async () => {
+    const dispatched: Event[] = [];
+    const onOpen = (event: Event) => { dispatched.push(event); };
+    document.addEventListener("workspace-file-open", onOpen);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:test");
+    const request = vi.fn(() => Promise.resolve({ ok: true, content: "<p>outside</p>" } satisfies JsonValue));
+    const panel = createTerminalPanel();
+    Reflect.set(panel, "context", terminalContext({
+      workspace: { id: "workspace-1", projectId: "project-1", path: "/home/rbowen/demo", label: "main", isMain: true },
+      peer: terminalPeer(request),
+    }));
+    document.body.append(panel);
+
+    try {
+      await callAsyncPanelMethod(panel, "openWorkspaceHtmlFile", "/home/rbowen/outside/chef.html");
+      await vi.waitFor(() => { expect(openSpy).toHaveBeenCalledTimes(1); });
+      expect(dispatched).toEqual([]);
+      expect(request).toHaveBeenCalledWith("terminal.read-local-html", { path: "/home/rbowen/outside/chef.html" }, undefined);
+      expect(Reflect.get(panel, "htmlOpenError")).toBeUndefined();
+      expect(openSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      panel.remove();
+      document.removeEventListener("workspace-file-open", onOpen);
+      openSpy.mockRestore();
+      createObjectURL.mockRestore();
+    }
+  });
+
+  it("dispatches workspace-file-open for a workspace html path without touching the peer", async () => {
+    const dispatched: Event[] = [];
+    const onOpen = (event: Event) => { dispatched.push(event); };
+    document.addEventListener("workspace-file-open", onOpen);
+    const request = vi.fn(() => Promise.resolve({ ok: false, error: "no" } satisfies JsonValue));
+    const panel = createTerminalPanel();
+    Reflect.set(panel, "context", terminalContext({
+      workspace: { id: "workspace-1", projectId: "project-1", path: "/home/rbowen/demo", label: "main", isMain: true },
+      peer: terminalPeer(request),
+    }));
+    document.body.append(panel);
+
+    try {
+      await callAsyncPanelMethod(panel, "openWorkspaceHtmlFile", "/home/rbowen/demo/report.html");
+    } finally {
+      panel.remove();
+      document.removeEventListener("workspace-file-open", onOpen);
+    }
+
+    expect(dispatched).toHaveLength(1);
+    expect(request).not.toHaveBeenCalled();
+  });
+});
+
 describe("matchWorkspaceHtmlPaths", () => {
   const root = "/home/rbowen/demo";
 
@@ -911,25 +965,61 @@ describe("matchWorkspaceHtmlPaths", () => {
     expect(matchWorkspaceHtmlPaths(`~other/x.html`, root)).toEqual([]);
   });
 
-  it("matches absolute and tilde forms interleaved in order", () => {
-    const line = `${root}/a.html then ~/b.html`;
+  it("matches absolute, tilde, and bare forms interleaved in order", () => {
+    const line = `${root}/a.html then ~/b.html then chef.html`;
     expect(matchWorkspaceHtmlPaths(line, root)).toEqual([
       { path: `${root}/a.html`, index: 0 },
       { path: `~/b.html`, index: 30 },
+      { path: `chef.html`, index: 44 },
     ]);
   });
 
-  it("ignores non-workspace, non-html, and non-absolute paths", () => {
-    expect(matchWorkspaceHtmlPaths(`/elsewhere/report.html`, root)).toEqual([]);
+  it("matches bare and relative html names", () => {
+    expect(matchWorkspaceHtmlPaths(`wrote chef-initial-probe.html`, root)).toEqual([
+      { path: `chef-initial-probe.html`, index: 6 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`wrote sub/foo.htm done`, root)).toEqual([
+      { path: `sub/foo.htm`, index: 6 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`wrote ./notes/page.html`, root)).toEqual([
+      { path: `./notes/page.html`, index: 6 },
+    ]);
+  });
+
+  it("drops bare matches contained in an absolute or tilde match", () => {
+    expect(matchWorkspaceHtmlPaths(`${root}/report.html`, root)).toEqual([
+      { path: `${root}/report.html`, index: 0 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`see ~/a.html`, root)).toEqual([
+      { path: `~/a.html`, index: 4 },
+    ]);
+  });
+
+  it("matches absolute home paths outside the workspace", () => {
+    expect(matchWorkspaceHtmlPaths(`wrote /home/rbowen/chef-initial-probe.html`, root)).toEqual([
+      { path: `/home/rbowen/chef-initial-probe.html`, index: 6 },
+    ]);
+  });
+
+  it("ignores non-html text, other-user tilde forms, and bare URLs", () => {
     expect(matchWorkspaceHtmlPaths(`${root}/report.md`, root)).toEqual([]);
-    expect(matchWorkspaceHtmlPaths(`report.html`, root)).toEqual([]);
+    expect(matchWorkspaceHtmlPaths(`~other/x.html`, root)).toEqual([]);
+    expect(matchWorkspaceHtmlPaths(`see https://example.com/page.html`, root)).toEqual([]);
   });
 
   it("stops at delimiters and requires the root directory boundary", () => {
     expect(matchWorkspaceHtmlPaths(`${root}/report.html, then ${root}-site/page.html`, root)).toEqual([
       { path: `${root}/report.html`, index: 0 },
+      // Not under the workspace root, but under home — clickable via the
+      // local-html-file endpoint.
+      { path: `${root}-site/page.html`, index: 36 },
     ]);
-    expect(matchWorkspaceHtmlPaths(`${root}extra/page.html`, root)).toEqual([]);
+    // `...demoextra/page.html` is not under the workspace but is under home —
+    // still clickable via the local-html-file endpoint.
+    expect(matchWorkspaceHtmlPaths(`${root}extra/page.html`, root)).toEqual([
+      { path: `${root}extra/page.html`, index: 0 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`/elsewhere/page.html`, root)).toEqual([]);
   });
 
   it("returns nothing for empty roots or lines", () => {

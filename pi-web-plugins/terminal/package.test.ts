@@ -77,6 +77,7 @@ describe("bundled Terminal package", () => {
       .sort();
     expect(files).toEqual([
       "browser/pi-web-plugin.js",
+      "localHtmlFile.js",
       "package.json",
       "server-plugin.js",
       "terminalService.js",

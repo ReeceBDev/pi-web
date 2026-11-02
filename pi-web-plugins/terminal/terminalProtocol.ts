@@ -24,6 +24,22 @@ export interface TerminalSize {
   rows: number;
 }
 
+export interface LocalHtmlFileResponse {
+  readonly ok: boolean;
+  readonly content?: string;
+  readonly error?: string;
+}
+
+function parseLocalHtmlFileResponse(value: JsonValue): LocalHtmlFileResponse {
+  const record = requireRecord(value, "Terminal local-html response");
+  if (typeof record["ok"] !== "boolean") throw new Error("Terminal local-html response ok must be a boolean");
+  return {
+    ok: record["ok"],
+    ...optionalStringField(record, "content", "Terminal local-html response"),
+    ...optionalStringField(record, "error", "Terminal local-html response"),
+  };
+}
+
 export interface TerminalCommandRunFilter {
   terminalId?: string;
   statuses?: TerminalCommandRunStatus[];
@@ -129,6 +145,10 @@ export class TerminalPeerClient {
 
   async cancelCommandRun(runId: string, signal?: AbortSignal): Promise<TerminalCommandRun> {
     return parseTerminalCommandRun(await this.request("terminal.cancel-run", { runId }, signal === undefined ? undefined : { signal }));
+  }
+
+  async readLocalHtml(absolutePath: string, signal?: AbortSignal): Promise<LocalHtmlFileResponse> {
+    return parseLocalHtmlFileResponse(await this.request("terminal.read-local-html", { path: absolutePath }, signal === undefined ? undefined : { signal }));
   }
 
   async attach(options: TerminalAttachOptions): Promise<PluginPeerChannel> {

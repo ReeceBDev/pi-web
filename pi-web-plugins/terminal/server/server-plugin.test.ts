@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
 import type {
   JsonValue,
   ServerPluginPeer,
@@ -18,8 +21,14 @@ import {
 import { TerminalService } from "./terminalService.js";
 
 const services: TerminalService[] = [];
+let dir: string;
 
-afterEach(() => {
+beforeEach(async () => {
+  dir = await mkdtemp(path.join(homedir(), "pi-web-terminal-local-html-test-"));
+});
+
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
   for (const service of services.splice(0)) service.dispose();
 });
 
@@ -169,6 +178,23 @@ describe.skipIf(process.platform === "win32")("Terminal peer server entry", () =
     for (const frame of frames) {
       expect(Buffer.byteLength(JSON.stringify(frame), "utf8")).toBeLessThanOrEqual(60 * 1024);
     }
+  });
+
+  it("reads home-confined html files through the read-local-html operation", async () => {
+    const backend = createTerminalPeer(trackedService());
+    const file = path.join(dir, "report.html");
+    await writeFile(file, "<p>peer hello</p>");
+
+    await expect(backendRequest(backend, requestContext("terminal.read-local-html", { path: file })))
+      .resolves.toEqual({ ok: true, content: "<p>peer hello</p>" });
+    await expect(backendRequest(backend, requestContext("terminal.read-local-html", { path: "/etc/passwd.html" })))
+      .resolves.toEqual({ ok: false, status: 403, error: "path is outside the home directory" });
+    await expect(backendRequest(backend, requestContext("terminal.read-local-html", { path: path.join(dir, "missing.html") })))
+      .resolves.toEqual({ ok: false, status: 404, error: "file not found" });
+    await expect(backendRequest(backend, requestContext("terminal.read-local-html", { path: path.join(dir, "notes.md") })))
+      .resolves.toEqual({ ok: false, status: 400, error: "only .html and .htm files are served" });
+    await expect(backendRequest(backend, requestContext("terminal.read-local-html", {})))
+      .rejects.toThrow("path");
   });
 
   it("publishes the required service only for the pi-web.terminal identity", async () => {

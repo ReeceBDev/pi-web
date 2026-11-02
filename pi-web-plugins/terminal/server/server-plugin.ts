@@ -11,8 +11,7 @@ import type {
   ServerPluginActivation,
   ServerPluginActivationContext,
 } from "@jmfederico/pi-web/server-plugin-api";
-import {
-  TerminalService,
+import { TerminalService,
   type CreateTerminalOptions,
   type RunTerminalCommandOptions,
   type TerminalActivitySink,
@@ -22,6 +21,7 @@ import {
   type TerminalInfo,
   type TerminalWorkspaceScope,
 } from "./terminalService.js";
+import { readLocalHtmlFile } from "./localHtmlFile.js";
 
 const TERMINAL_CHANNEL_OUTPUT_FRAME_TARGET_BYTES = 60 * 1024;
 
@@ -113,7 +113,7 @@ export function createTerminalPeer(
   });
 }
 
-function terminalRequest(service: TerminalService, context: ServerPluginPeerRequestContext): JsonValue {
+async function terminalRequest(service: TerminalService, context: ServerPluginPeerRequestContext): Promise<JsonValue> {
   throwIfAborted(context.signal);
   const scope = terminalScope(context);
   switch (context.operation) {
@@ -148,6 +148,14 @@ function terminalRequest(service: TerminalService, context: ServerPluginPeerRequ
     }
     case "terminal.cancel-run":
       return commandRunJson(service.cancelCommandRunForScope(scope, requireIdInput(context.input, context.operation, "runId")));
+    case "terminal.read-local-html": {
+      const input = requireObject(context.input, context.operation);
+      const result = await readLocalHtmlFile(requireString(input, "path", context.operation));
+      if (result.error !== undefined || result.content === undefined) {
+        return { ok: false, status: result.status, error: result.error ?? "file not found" };
+      }
+      return { ok: true, content: result.content };
+    }
     default:
       throw new Error(`Unsupported Terminal operation: ${context.operation}`);
   }
