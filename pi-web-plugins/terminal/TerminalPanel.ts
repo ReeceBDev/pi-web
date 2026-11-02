@@ -62,6 +62,8 @@ export class TerminalPanel extends LitElement {
   @state() private copySnapshot: TerminalCopySnapshot | undefined;
   @state() private copyStatus: string | undefined;
   @state() private htmlOpenError: string | undefined;
+  /** The shell's announced cwd (OSC 7); undefined until the shell reports one. */
+  private currentCwd: string | undefined;
 
   private terminal: Terminal | undefined;
   private fitAddon: FitAddon | undefined;
@@ -577,6 +579,14 @@ export class TerminalPanel extends LitElement {
     this.terminal = terminal;
     this.fitAddon = fitAddon;
     terminal.registerLinkProvider(this.createWorkspaceFileLinkProvider());
+    // The shell reports its cwd before every prompt (OSC 7, see terminalService);
+    // bare/relative scrollback paths resolve against it. Returning false lets
+    // xterm keep its own default OSC 7 handling.
+    terminal.parser.registerOscHandler(7, (data) => {
+      const path = parseOsc7Cwd(data);
+      if (path !== undefined) this.currentCwd = path;
+      return false;
+    });
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => { this.fitAndNotify(); });
       this.resizeObserver.observe(terminalHost);
@@ -796,9 +806,8 @@ export class TerminalPanel extends LitElement {
    * open in the Files panel (live HTML preview), out-of-workspace files open in
    * a new tab via the local-html-file endpoint. ponytail: single-line matches
    * only — paths wrapped across terminal rows will not linkify; multi-line join
-   * if that ever matters. Bare/relative names resolve against the workspace
-   * root, assuming the shell cwd is the workspace root — a click after `cd`
-   * elsewhere resolves wrong.
+   * if that ever matters. Bare/relative names resolve against the shell's
+   * announced cwd (OSC 7; workspace root before the first prompt).
    */
   private createWorkspaceFileLinkProvider(): ILinkProvider {
     return {
@@ -834,15 +843,7 @@ export class TerminalPanel extends LitElement {
     if (context === undefined) return;
     const root = trimTrailingSlashes(context.workspace.path);
     if (root === "") return;
-    // ponytail: home derived from root — its parent dir (/home/<user> on this box).
-    const home = root.slice(0, root.lastIndexOf("/"));
-    const resolved = printedPath.startsWith("~")
-      ? normalizePathSegments(home + printedPath.slice(1))
-      : printedPath.startsWith("/")
-        ? normalizePathSegments(printedPath)
-        // Bare/relative names (`chef.html`, `sub/foo.html`) resolve against the
-        // workspace root — assumes the shell cwd is the workspace root.
-        : normalizePathSegments(`${root}/${printedPath}`);
+    const resolved = resolvePrintedHtmlPath(printedPath, root, this.currentCwd ?? root);
     if (resolved.startsWith(`${root}/`)) {
       // Same bubbling event chat links use; the host resolves it into a Files
       // panel deep link. No listener is bound when the machine or workspace does
@@ -892,6 +893,7 @@ export class TerminalPanel extends LitElement {
 
   private disposeTerminalView(): void {
     this.channelGeneration += 1;
+    this.currentCwd = undefined;
     if (this.channelReconnectTimer !== undefined) window.clearTimeout(this.channelReconnectTimer);
     this.channelReconnectTimer = undefined;
     this.channelReconnectAttempt = 0;
@@ -1246,6 +1248,47 @@ function terminalCopyRunStyle(style: TerminalCopyRunStyle): StyleInfo {
   };
 }
 
+/**
+ * Resolves an HTML path as printed in scrollback to an absolute path: tilde
+ * forms expand to the machine home (derived from `root`, its parent dir),
+ * absolute forms pass through, and bare/relative names resolve against `cwd` —
+ * the shell's real working directory when the shell has announced one (OSC 7),
+ * otherwise the workspace root. ponytail: home derived from root.
+ */
+export function resolvePrintedHtmlPath(printedPath: string, root: string, cwd: string): string {
+  const trimmedRoot = trimTrailingSlashes(root);
+  const home = trimmedRoot.slice(0, trimmedRoot.lastIndexOf("/"));
+  return printedPath.startsWith("~")
+    ? normalizePathSegments(home + printedPath.slice(1))
+    : printedPath.startsWith("/")
+      ? normalizePathSegments(printedPath)
+      : normalizePathSegments(`${trimTrailingSlashes(cwd)}/${printedPath}`);
+}
+
+/**
+ * Parses an OSC 7 cwd report (`file://host/path` as terminals emit it, or a
+ * plain absolute path); returns the percent-decoded absolute path, or
+ * undefined for anything that is not one.
+ */
+export function parseOsc7Cwd(data: string): string | undefined {
+  let path: string;
+  if (data.startsWith("file://")) {
+    const authorityAndPath = data.slice("file://".length);
+    const slashIndex = authorityAndPath.indexOf("/");
+    if (slashIndex === -1) return undefined;
+    path = authorityAndPath.slice(slashIndex);
+  } else if (data.startsWith("/")) {
+    path = data;
+  } else {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return undefined;
+  }
+}
+
 function isCommandRunPending(run: TerminalCommandRun): boolean {
   return run.status === "queued" || run.status === "running";
 }
@@ -1260,7 +1303,8 @@ function commandRunCompletionLabel(run: TerminalCommandRun): string {
  * `root` or under the machine home (derived from `root`, `~` expands to it),
  * tilde forms (match text stays the tilde form; the link handler resolves it),
  * and bare/relative names like `chef.html` or `sub/foo.html` — what `ls`
- * prints; the link handler resolves those against the workspace root. Returns
+ * prints; the link handler resolves those against the shell's announced cwd
+ * (OSC 7) or, before the first prompt, the workspace root. Returns
  * matches in order with their 0-based character index; matches fully contained
  * in a longer match are dropped so one path yields one link, not two.
  * ponytail: single-line only (see link provider); O(n²) containment check —

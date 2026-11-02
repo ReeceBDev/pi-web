@@ -252,7 +252,7 @@ export class TerminalService {
       cwd: record.cwd,
       cols: 100,
       rows: 30,
-      env: terminalEnvironment(),
+      env: terminalEnvironment(shell),
     });
     this.attachPtyEvents(record);
     const info = toInfo(record);
@@ -292,7 +292,7 @@ export class TerminalService {
       cwd: options.cwd,
       cols: options.cols ?? 100,
       rows: options.rows ?? 30,
-      env: terminalEnvironment(),
+      env: terminalEnvironment(shell),
     });
     const requestedName = options.name?.trim();
     const record: TerminalRecord = {
@@ -415,8 +415,29 @@ export function interactiveShellArgs(shell: string): string[] {
   return executable === "bash" || executable === "zsh" || executable === "fish" ? ["-l"] : [];
 }
 
-function terminalEnvironment(): NodeJS.ProcessEnv {
-  return { ...process.env, TERM: "xterm-256color", PI_WEB_TERMINAL: "1" };
+function terminalEnvironment(shell: string): NodeJS.ProcessEnv {
+  const promptCommand = osc7PromptCommandValue(shell);
+  return {
+    ...process.env,
+    TERM: "xterm-256color",
+    PI_WEB_TERMINAL: "1",
+    ...(promptCommand === undefined ? {} : { PROMPT_COMMAND: promptCommand }),
+  };
+}
+
+/**
+ * Makes bash announce its working directory (OSC 7) before every prompt so the
+ * browser can resolve bare/relative file names printed in scrollback against
+ * the shell's real cwd. PS1-safe: PROMPT_COMMAND runs separately from the
+ * prompt string. ponytail: env-var injection only reaches NEW terminal
+ * sessions — already-running shells keep the old behavior — and a bashrc that
+ * overwrites PROMPT_COMMAND wins over ours; per-shell precmd hooks (zsh/fish)
+ * if those shells ever need it.
+ */
+export function osc7PromptCommandValue(shell: string): string | undefined {
+  const executable = shell.split(/[\\/]/).at(-1)?.toLowerCase().replace(/^-/, "").replace(/\.exe$/, "");
+  if (executable !== "bash") return undefined;
+  return `printf '\\033]7;file://%s%s\\a' "$HOSTNAME" "$PWD"`;
 }
 
 function commandRunShellScript(command: string): string {

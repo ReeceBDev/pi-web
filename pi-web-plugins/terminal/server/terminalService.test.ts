@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ServerPluginNoticeInput } from "@jmfederico/pi-web/server-plugin-api";
-import { interactiveShellArgs, TerminalService, type TerminalActivitySink, type TerminalInfo, type TerminalWorkspaceScope } from "./terminalService";
+import { interactiveShellArgs, osc7PromptCommandValue, TerminalService, type TerminalActivitySink, type TerminalInfo, type TerminalWorkspaceScope } from "./terminalService";
 
 describe("interactive shell arguments", () => {
   it.each([
@@ -17,6 +17,27 @@ describe("interactive shell arguments", () => {
     { shell: "cmd.exe", expected: [] },
   ])("uses login mode only for a supported shell: $shell", ({ shell, expected }) => {
     expect(interactiveShellArgs(shell)).toEqual(expected);
+  });
+});
+
+describe("osc7 prompt command", () => {
+  it.each([
+    { shell: "bash" },
+    { shell: "/bin/bash" },
+    { shell: String.raw`C:\Program Files\Git\bin\bash.exe` },
+  ])("emits an OSC 7 printf for bash: $shell", ({ shell }) => {
+    const value = osc7PromptCommandValue(shell);
+    expect(value).toBeDefined();
+    expect(value).toContain("\\033]7;file://%s%s\\a");
+    expect(value).toContain(String.raw`"$PWD"`);
+  });
+
+  it.each([
+    { shell: "zsh" },
+    { shell: "/opt/homebrew/bin/fish" },
+    { shell: "pwsh" },
+  ])("emits nothing for non-bash shells: $shell", ({ shell }) => {
+    expect(osc7PromptCommandValue(shell)).toBeUndefined();
   });
 });
 

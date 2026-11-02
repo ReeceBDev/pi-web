@@ -4,7 +4,7 @@ import type { JsonValue, PluginPeerChannelOptions, PluginPeer, WorkspacePanelCon
 import { Terminal } from "@xterm/xterm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalBrowserRuntime } from "./TerminalBrowserRuntime";
-import { TerminalPanel, filterTerminalInput, matchWorkspaceHtmlPaths } from "./TerminalPanel";
+import { TerminalPanel, filterTerminalInput, matchWorkspaceHtmlPaths, parseOsc7Cwd, resolvePrintedHtmlPath } from "./TerminalPanel";
 import { defineTerminalCustomElements, TERMINAL_SOFT_KEYS_ELEMENT } from "./pi-web-plugin";
 import { TERMINAL_CHANNEL_DATA_JSON_MAX_BYTES } from "./terminalProtocol";
 import { InMemoryTerminalSelectionMemory } from "./terminalSelection";
@@ -931,6 +931,49 @@ describe("openWorkspaceHtmlFile routing", () => {
 
     expect(dispatched).toHaveLength(1);
     expect(request).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseOsc7Cwd", () => {
+  it("parses file:// URLs with a hostname", () => {
+    expect(parseOsc7Cwd("file://hephaestus/home/rbowen/demo")).toBe("/home/rbowen/demo");
+  });
+
+  it("parses file:// URLs with an empty authority", () => {
+    expect(parseOsc7Cwd("file:///home/rbowen/demo")).toBe("/home/rbowen/demo");
+  });
+
+  it("percent-decodes the path", () => {
+    expect(parseOsc7Cwd("file://host/home/rbowen/my%20dir")).toBe("/home/rbowen/my dir");
+  });
+
+  it("accepts a plain absolute path", () => {
+    expect(parseOsc7Cwd("/home/rbowen/demo")).toBe("/home/rbowen/demo");
+  });
+
+  it("rejects relative data, bare authorities, and invalid escapes", () => {
+    expect(parseOsc7Cwd("relative/path")).toBeUndefined();
+    expect(parseOsc7Cwd("file://host")).toBeUndefined();
+    expect(parseOsc7Cwd("file://host/home/%ZZ")).toBeUndefined();
+  });
+});
+
+describe("resolvePrintedHtmlPath", () => {
+  const root = "/home/rbowen/demo";
+
+  it("resolves bare and relative names against the shell cwd", () => {
+    expect(resolvePrintedHtmlPath("chef.html", root, "/home/rbowen/hassan-business")).toBe("/home/rbowen/hassan-business/chef.html");
+    expect(resolvePrintedHtmlPath("sub/foo.htm", root, "/home/rbowen/hassan-business")).toBe("/home/rbowen/hassan-business/sub/foo.htm");
+    expect(resolvePrintedHtmlPath("./notes/page.html", root, "/home/rbowen/demo")).toBe("/home/rbowen/demo/notes/page.html");
+  });
+
+  it("resolves bare names against the workspace root before the first prompt", () => {
+    expect(resolvePrintedHtmlPath("chef.html", root, root)).toBe("/home/rbowen/demo/chef.html");
+  });
+
+  it("expands tilde forms and passes absolute forms through regardless of cwd", () => {
+    expect(resolvePrintedHtmlPath("~/hassan-business/chef.html", root, "/tmp")).toBe("/home/rbowen/hassan-business/chef.html");
+    expect(resolvePrintedHtmlPath("/home/rbowen/outside/chef.html", root, "/tmp")).toBe("/home/rbowen/outside/chef.html");
   });
 });
 
