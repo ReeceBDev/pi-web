@@ -900,6 +900,25 @@ describe("matchWorkspaceHtmlPaths", () => {
     ]);
   });
 
+  it("matches tilde forms of workspace html paths", () => {
+    expect(matchWorkspaceHtmlPaths(`wrote ~/hassan-business/chef-initial-probe.html`, root)).toEqual([
+      { path: `~/hassan-business/chef-initial-probe.html`, index: 6 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`see ~/a.html and ~/b/index.htm`, root)).toEqual([
+      { path: `~/a.html`, index: 4 },
+      { path: `~/b/index.htm`, index: 17 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`~other/x.html`, root)).toEqual([]);
+  });
+
+  it("matches absolute and tilde forms interleaved in order", () => {
+    const line = `${root}/a.html then ~/b.html`;
+    expect(matchWorkspaceHtmlPaths(line, root)).toEqual([
+      { path: `${root}/a.html`, index: 0 },
+      { path: `~/b.html`, index: 30 },
+    ]);
+  });
+
   it("ignores non-workspace, non-html, and non-absolute paths", () => {
     expect(matchWorkspaceHtmlPaths(`/elsewhere/report.html`, root)).toEqual([]);
     expect(matchWorkspaceHtmlPaths(`${root}/report.md`, root)).toEqual([]);

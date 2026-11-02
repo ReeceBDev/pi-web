@@ -831,7 +831,11 @@ export class TerminalPanel extends LitElement {
     const context = this.context;
     if (context === undefined) return;
     const root = trimTrailingSlashes(context.workspace.path);
-    if (root === "" || !absolutePath.startsWith(`${root}/`)) return;
+    if (root === "") return;
+    // ponytail: home derived from root (root is always /home/<user>/<ws> on this box).
+    const home = root.split("/").slice(0, 4).join("/");
+    const resolved = absolutePath.startsWith("~") ? home + absolutePath.slice(1) : absolutePath;
+    if (!resolved.startsWith(`${root}/`)) return;
     // Same bubbling event chat links use; the host resolves it into a Files
     // panel deep link. No listener is bound when the machine or workspace does
     // not match, in which case nothing happens.
@@ -841,7 +845,7 @@ export class TerminalPanel extends LitElement {
         projectId: context.workspace.projectId,
         workspaceId: context.workspace.id,
         root,
-        path: absolutePath.slice(root.length + 1),
+        path: resolved.slice(root.length + 1),
       },
       bubbles: true,
       composed: true,
@@ -1215,19 +1219,28 @@ function commandRunCompletionLabel(run: TerminalCommandRun): string {
 
 /**
  * Matches absolute paths under `root` ending in .html/.htm within a line of
- * terminal text. Returns matches in order with their 0-based character index.
+ * terminal text. `~/<rest>.html?` and `~.html?` tilde forms are also matched
+ * (match text stays the tilde form; the link handler resolves `~` to home).
+ * Returns matches in order with their 0-based character index.
  * ponytail: single-line, absolute-under-root only (see link provider).
  */
 export function matchWorkspaceHtmlPaths(lineText: string, root: string): { path: string; index: number }[] {
   const trimmedRoot = trimTrailingSlashes(root);
   if (trimmedRoot === "" || lineText === "") return [];
+  const body = "[^\\s`'\"<>{}\\[\\](),;]+?";
   const escapedRoot = trimmedRoot.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const pattern = new RegExp(escapedRoot + "/[^\\s`'\"<>{}\\[\\](),;]+?\\.html?\\b", "giu");
+  const patterns = [
+    new RegExp(escapedRoot + "/" + body + "\\.html?\\b", "giu"),
+    // `~` expands to the machine home directory.
+    new RegExp("~(?:/" + body + ")?\\.html?\\b", "giu"),
+  ];
   const matches: { path: string; index: number }[] = [];
-  for (const match of lineText.matchAll(pattern)) {
-    matches.push({ path: match[0], index: match.index });
+  for (const pattern of patterns) {
+    for (const match of lineText.matchAll(pattern)) {
+      matches.push({ path: match[0], index: match.index });
+    }
   }
-  return matches;
+  return matches.sort((a, b) => a.index - b.index);
 }
 
 function trimTrailingSlashes(path: string): string {
