@@ -1649,6 +1649,7 @@ export class PiWebApp extends LitElement {
     return html`
       <workspace-panel
         id="workspace-panel"
+        @workspace-file-open=${this.handleWorkspaceFileOpen}
         .workspace=${workspace}
         .panelContext=${panelContext}
         .emptyState=${emptyState}

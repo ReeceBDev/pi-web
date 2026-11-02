@@ -4,7 +4,7 @@ import type { JsonValue, PluginPeerChannelOptions, PluginPeer, WorkspacePanelCon
 import { Terminal } from "@xterm/xterm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TerminalBrowserRuntime } from "./TerminalBrowserRuntime";
-import { TerminalPanel, filterTerminalInput } from "./TerminalPanel";
+import { TerminalPanel, filterTerminalInput, matchWorkspaceHtmlPaths } from "./TerminalPanel";
 import { defineTerminalCustomElements, TERMINAL_SOFT_KEYS_ELEMENT } from "./pi-web-plugin";
 import { TERMINAL_CHANNEL_DATA_JSON_MAX_BYTES } from "./terminalProtocol";
 import { InMemoryTerminalSelectionMemory } from "./terminalSelection";
@@ -879,3 +879,42 @@ function callPanelMethod(panel: TerminalPanel, name: string, ...args: unknown[])
 async function callAsyncPanelMethod(panel: TerminalPanel, name: string, ...args: unknown[]): Promise<void> {
   await callPanelMethod(panel, name, ...args);
 }
+
+describe("matchWorkspaceHtmlPaths", () => {
+  const root = "/home/rbowen/demo";
+
+  it("matches workspace html paths with their index", () => {
+    expect(matchWorkspaceHtmlPaths(`wrote ${root}/report.html`, root)).toEqual([
+      { path: `${root}/report.html`, index: 6 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`${root}/a/b.htm done`, root)).toEqual([
+      { path: `${root}/a/b.htm`, index: 0 },
+    ]);
+  });
+
+  it("matches several paths on one line", () => {
+    const line = `see ${root}/a.html and ${root}/b/index.htm`;
+    expect(matchWorkspaceHtmlPaths(line, root)).toEqual([
+      { path: `${root}/a.html`, index: 4 },
+      { path: `${root}/b/index.htm`, index: 33 },
+    ]);
+  });
+
+  it("ignores non-workspace, non-html, and non-absolute paths", () => {
+    expect(matchWorkspaceHtmlPaths(`/elsewhere/report.html`, root)).toEqual([]);
+    expect(matchWorkspaceHtmlPaths(`${root}/report.md`, root)).toEqual([]);
+    expect(matchWorkspaceHtmlPaths(`report.html`, root)).toEqual([]);
+  });
+
+  it("stops at delimiters and requires the root directory boundary", () => {
+    expect(matchWorkspaceHtmlPaths(`${root}/report.html, then ${root}-site/page.html`, root)).toEqual([
+      { path: `${root}/report.html`, index: 0 },
+    ]);
+    expect(matchWorkspaceHtmlPaths(`${root}extra/page.html`, root)).toEqual([]);
+  });
+
+  it("returns nothing for empty roots or lines", () => {
+    expect(matchWorkspaceHtmlPaths(`${root}/a.html`, "")).toEqual([]);
+    expect(matchWorkspaceHtmlPaths("", root)).toEqual([]);
+  });
+});

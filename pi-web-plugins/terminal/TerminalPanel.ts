@@ -2,7 +2,7 @@ import { css, html, LitElement, unsafeCSS } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import { styleMap, type StyleInfo } from "lit/directives/style-map.js";
-import { Terminal, type ITerminalOptions, type ITheme } from "@xterm/xterm";
+import { Terminal, type ILinkProvider, type ITerminalOptions, type ITheme } from "@xterm/xterm";
 import { FitAddon, type ITerminalDimensions } from "@xterm/addon-fit";
 import xtermStyles from "@xterm/xterm/css/xterm.css?inline";
 import type { PluginPeerChannel, PluginPeerChannelClose, TerminalCommandRun, WorkspacePanelContext } from "@jmfederico/pi-web/plugin-api";
@@ -575,6 +575,7 @@ export class TerminalPanel extends LitElement {
     terminal.open(terminalHost);
     this.terminal = terminal;
     this.fitAddon = fitAddon;
+    terminal.registerLinkProvider(this.createWorkspaceFileLinkProvider());
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => { this.fitAndNotify(); });
       this.resizeObserver.observe(terminalHost);
@@ -787,6 +788,65 @@ export class TerminalPanel extends LitElement {
       this.connectionError = `Terminal send failed: ${errorMessage(error)}`;
       return false;
     }
+  }
+
+  /**
+   * Makes workspace HTML file paths printed in the scrollback clickable: they
+   * open the file in the Files panel, which renders HTML live by default.
+   * ponytail: single-line matches only — paths wrapped across terminal rows
+   * will not linkify; multi-line join if that ever matters. Relative paths are
+   * deliberately excluded: the browser cannot know the terminal's cwd, and
+   * bare-name matching would hit URLs and noise.
+   */
+  private createWorkspaceFileLinkProvider(): ILinkProvider {
+    return {
+      provideLinks: (bufferLineNumber, callback) => {
+        const context = this.context;
+        const terminal = this.terminal;
+        if (context === undefined || terminal === undefined) {
+          callback(undefined);
+          return;
+        }
+        const line = terminal.buffer.active.getLine(bufferLineNumber - 1);
+        if (line === undefined) {
+          callback(undefined);
+          return;
+        }
+        const lineText = line.translateToString(true);
+        callback(matchWorkspaceHtmlPaths(lineText, context.workspace.path).map(({ path, index }) => ({
+          text: path,
+          range: {
+            // Ranges are 1-based columns; end.x is one past the last character,
+            // matching xterm's own link providers.
+            start: { x: index + 1, y: bufferLineNumber },
+            end: { x: index + 1 + path.length, y: bufferLineNumber },
+          },
+          activate: () => { this.openWorkspaceHtmlFile(path); },
+        })));
+      },
+    };
+  }
+
+  private openWorkspaceHtmlFile(absolutePath: string): void {
+    const context = this.context;
+    if (context === undefined) return;
+    const root = trimTrailingSlashes(context.workspace.path);
+    if (root === "" || !absolutePath.startsWith(`${root}/`)) return;
+    // Same bubbling event chat links use; the host resolves it into a Files
+    // panel deep link. No listener is bound when the machine or workspace does
+    // not match, in which case nothing happens.
+    this.dispatchEvent(new CustomEvent("workspace-file-open", {
+      detail: {
+        machineId: context.machine.id,
+        projectId: context.workspace.projectId,
+        workspaceId: context.workspace.id,
+        root,
+        path: absolutePath.slice(root.length + 1),
+      },
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    }));
   }
 
   private disposeTerminalView(): void {
@@ -1151,6 +1211,27 @@ function isCommandRunPending(run: TerminalCommandRun): boolean {
 function commandRunCompletionLabel(run: TerminalCommandRun): string {
   if (run.status === "succeeded") return `Command succeeded${run.exitCode === undefined ? "" : ` with exit code ${String(run.exitCode)}`}`;
   return `Command failed${run.exitCode === undefined ? "" : ` with exit code ${String(run.exitCode)}`}`;
+}
+
+/**
+ * Matches absolute paths under `root` ending in .html/.htm within a line of
+ * terminal text. Returns matches in order with their 0-based character index.
+ * ponytail: single-line, absolute-under-root only (see link provider).
+ */
+export function matchWorkspaceHtmlPaths(lineText: string, root: string): { path: string; index: number }[] {
+  const trimmedRoot = trimTrailingSlashes(root);
+  if (trimmedRoot === "" || lineText === "") return [];
+  const escapedRoot = trimmedRoot.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const pattern = new RegExp(escapedRoot + "/[^\\s`'\"<>{}\\[\\](),;]+?\\.html?\\b", "giu");
+  const matches: { path: string; index: number }[] = [];
+  for (const match of lineText.matchAll(pattern)) {
+    matches.push({ path: match[0], index: match.index });
+  }
+  return matches;
+}
+
+function trimTrailingSlashes(path: string): string {
+  return path.replace(/\/+$/u, "");
 }
 
 export function filterTerminalInput(data: string): string {
