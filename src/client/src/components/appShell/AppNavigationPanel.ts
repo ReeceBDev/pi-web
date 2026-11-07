@@ -61,6 +61,10 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onSelectWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onDeleteWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onStartSession?: () => void | Promise<void>;
+  @property({ attribute: false }) unitMenuCwd?: string | undefined;
+  @property({ attribute: false }) onSessionMenuOpen?: (session: SessionInfo) => void;
+  @property({ attribute: false }) onStartSessionAt?: (path: string) => void;
+  @property({ attribute: false }) onAddWorktree?: (session: SessionInfo) => void;
   @property({ attribute: false }) onSelectSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onArchiveSession?: (session: SessionInfo) => void | Promise<void>;
   @property({ attribute: false }) onArchiveSessionWithDescendants?: (session: SessionInfo) => void | Promise<void>;
@@ -115,6 +119,9 @@ export class AppNavigationPanel extends LitElement {
     toggleSessions: () => { this.onToggleSessions?.(); },
     archivedCollapsed: () => this.onArchivedCollapsed?.(),
     startSession: () => this.onStartSession?.(),
+    sessionMenuOpen: (session: SessionInfo) => this.onSessionMenuOpen?.(session),
+    startSessionAt: (path: string) => this.onStartSessionAt?.(path),
+    addWorktree: (session: SessionInfo) => this.onAddWorktree?.(session),
     selectSession: (session: SessionInfo) => this.onSelectSession?.(session),
     archiveSession: (session: SessionInfo) => this.onArchiveSession?.(session),
     archiveSessionWithDescendants: (session: SessionInfo) => this.onArchiveSessionWithDescendants?.(session),
@@ -226,6 +233,10 @@ export class AppNavigationPanel extends LitElement {
         .onToggleCollapsed=${this.childCallbacks.toggleSessions}
         .onArchivedCollapsed=${this.childCallbacks.archivedCollapsed}
         .onStart=${this.childCallbacks.startSession}
+        .unitMenuCwd=${this.unitMenuCwd}
+        .onSessionMenuOpen=${this.childCallbacks.sessionMenuOpen}
+        .onStartAt=${this.childCallbacks.startSessionAt}
+        .onAddWorktree=${this.childCallbacks.addWorktree}
         .onSelect=${this.childCallbacks.selectSession}
         .onArchive=${this.childCallbacks.archiveSession}
         .onArchiveWithDescendants=${this.childCallbacks.archiveSessionWithDescendants}

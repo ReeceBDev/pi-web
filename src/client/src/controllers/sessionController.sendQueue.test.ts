@@ -193,6 +193,7 @@ describe("SessionController send queue", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
 
@@ -258,6 +259,7 @@ describe("SessionController send queue", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
 
@@ -309,6 +311,7 @@ describe("SessionController send queue", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
     await controller.send("recover me");
@@ -356,9 +359,11 @@ describe("SessionController send queue", () => {
     );
 
     const firstStart = controller.startSession();
+    await flushPendingRowPublication();
     const firstTemporary = state.selectedSession;
     if (firstTemporary === undefined) throw new Error("Expected first temporary session");
     const secondStart = controller.startSession();
+    await flushPendingRowPublication();
     const secondTemporary = state.selectedSession;
     if (secondTemporary === undefined) throw new Error("Expected second temporary session");
 
@@ -385,3 +390,11 @@ describe("SessionController send queue", () => {
     expect(state.clientQueuedSessionMessages[firstStarted.id]).toBeUndefined();
   });
 });
+
+/** The + New Work flow probes the unit supervisor before publishing the
+ * pending row (the path must be fixed before navigation selection is
+ * captured). One macrotask lets that probe settle; the deferred backend
+ * start used by these tests remains unresolved. */
+async function flushPendingRowPublication(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}

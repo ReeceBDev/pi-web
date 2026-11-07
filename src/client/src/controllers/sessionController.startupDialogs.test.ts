@@ -83,12 +83,14 @@ function pendingStartController(state: { current: AppState }, api: Partial<typeo
   return { controller, socket, startRequest, state };
 }
 
-function beginPendingStart(harness: PendingStartHarness): { start: Promise<void>; tempId: string } {
+function beginPendingStart(harness: PendingStartHarness): Promise<{ start: Promise<void>; tempId: string }> {
   const start = harness.controller.startSession();
-  const tempId = harness.state.current.selectedSession?.id;
-  if (tempId === undefined) throw new Error("Expected a pending-start row to be selected");
-  if (!tempId.startsWith("creating:")) throw new Error("Expected a pending-start row to be selected");
-  return { start, tempId };
+  return flushPendingRowPublication().then(() => {
+    const tempId = harness.state.current.selectedSession?.id;
+    if (tempId === undefined) throw new Error("Expected a pending-start row to be selected");
+    if (!tempId.startsWith("creating:")) throw new Error("Expected a pending-start row to be selected");
+    return { start, tempId };
+  });
 }
 
 function reportBackendSessionId(harness: PendingStartHarness, tempId: string): void {
@@ -110,7 +112,7 @@ describe("SessionController session_start dialog startup reachability", () => {
         return Promise.resolve(status(sessionLookupId(session)));
       },
     });
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     expect(harness.socket.connectedSessionIds).toEqual([]);
 
     reportBackendSessionId(harness, tempId);
@@ -124,7 +126,7 @@ describe("SessionController session_start dialog startup reachability", () => {
   it("shows a dialog that opens mid-startup on the pending row, answerable before readiness", async () => {
     const state = { current: { ...initialAppState(), selectedWorkspace: workspace, sessions: [] } };
     const harness = pendingStartController(state);
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
 
     harness.socket.emit({ type: "dialog.opened", dialog: dialog("dialog-1") });
@@ -140,7 +142,7 @@ describe("SessionController session_start dialog startup reachability", () => {
     const harness = pendingStartController(state, {
       status: (session) => Promise.resolve(sessionLookupId(session) === BACKEND_SESSION_ID ? statusWithDialogs(BACKEND_SESSION_ID, [dialog("dialog-1")]) : status(sessionLookupId(session))),
     });
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
 
     reportBackendSessionId(harness, tempId);
 
@@ -163,7 +165,7 @@ describe("SessionController session_start dialog startup reachability", () => {
         ? Promise.reject(new Error("Session not found"))
         : Promise.resolve(status(sessionLookupId(session))),
     });
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
 
     harness.socket.emit({ type: "dialog.opened", dialog: dialog("dialog-1") });
@@ -184,7 +186,7 @@ describe("SessionController session_start dialog startup reachability", () => {
         return Promise.resolve(closeResponse(status(BACKEND_SESSION_ID)));
       },
     });
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
     harness.socket.emit({ type: "dialog.opened", dialog: dialog("dialog-1") });
 
@@ -217,7 +219,7 @@ describe("SessionController session_start dialog startup reachability", () => {
         });
       },
     });
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
     harness.socket.emit({ type: "dialog.opened", dialog: dialog("dialog-1") });
 
@@ -235,7 +237,7 @@ describe("SessionController session_start dialog startup reachability", () => {
     const harness = pendingStartController(state, {
       answerDialog: () => Promise.resolve({ result: "stale", sessionStatus: statusWithDialogs(BACKEND_SESSION_ID, [dialog("dialog-2")]) }),
     });
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
     harness.socket.emit({ type: "dialog.opened", dialog: dialog("dialog-1") });
 
@@ -257,7 +259,7 @@ describe("SessionController session_start dialog startup reachability", () => {
         return Promise.resolve(closeResponse(status(BACKEND_SESSION_ID)));
       },
     });
-    const { start } = beginPendingStart(harness);
+    const { start } = await beginPendingStart(harness);
 
     await harness.controller.answerDialog("dialog-1", true);
 
@@ -269,7 +271,7 @@ describe("SessionController session_start dialog startup reachability", () => {
   it("re-subscribes when the pending row is re-selected mid-startup", async () => {
     const state = { current: { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] } };
     const harness = pendingStartController(state);
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
     expect(harness.socket.connectedSessionIds).toEqual([BACKEND_SESSION_ID]);
 
@@ -289,7 +291,7 @@ describe("SessionController session_start dialog startup reachability", () => {
   it("does not subscribe for another browser's create", async () => {
     const state = { current: { ...initialAppState(), selectedWorkspace: workspace, sessions: [] } };
     const harness = pendingStartController(state);
-    const { start } = beginPendingStart(harness);
+    const { start } = await beginPendingStart(harness);
 
     harness.controller.applyGlobalEvent({ type: "session.startup", startupToken: "pending-session-9-other-tab", activity: startupActivity() });
     runPendingAnimationFrames();
@@ -314,7 +316,7 @@ describe("SessionController session_start dialog startup reachability", () => {
         return Promise.resolve(status(sessionLookupId(session)));
       },
     });
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
     harness.socket.emit({ type: "dialog.opened", dialog: dialog("dialog-1") });
     expect(harness.state.current.pendingDialogs).toEqual([dialog("dialog-1")]);
@@ -343,7 +345,7 @@ describe("SessionController session_start dialog startup reachability", () => {
       },
     });
     const closeSpy = vi.spyOn(harness.socket, "close");
-    const { start, tempId } = beginPendingStart(harness);
+    const { start, tempId } = await beginPendingStart(harness);
     reportBackendSessionId(harness, tempId);
     harness.socket.emit({ type: "dialog.opened", dialog: dialog("dialog-1") });
     expect(harness.state.current.pendingDialogs).toEqual([dialog("dialog-1")]);
@@ -363,3 +365,11 @@ describe("SessionController session_start dialog startup reachability", () => {
     expect(answerCalled).toBe(false);
   });
 });
+
+/** The + New Work flow probes the unit supervisor before publishing the
+ * pending row (the path must be fixed before navigation selection is
+ * captured). One macrotask lets that probe settle; the deferred backend
+ * start used by these tests remains unresolved. */
+async function flushPendingRowPublication(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}

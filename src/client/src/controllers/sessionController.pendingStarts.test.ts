@@ -31,6 +31,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporarySession = state.selectedSession;
 
     expect(temporarySession?.id).toMatch(/^creating:[0-9a-f]{32}$/);
@@ -72,6 +73,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession({ updateUrl: false });
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     expect(temporaryId).toMatch(/^creating:/);
 
@@ -115,6 +117,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     startRequest.resolve(started);
     await start;
 
@@ -169,6 +172,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession({ updateUrl: false });
+    await flushPendingRowPublication();
     route = { ...route, view: "workspace" };
     startRequest.resolve(started);
     await start;
@@ -200,6 +204,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession({ updateUrl: false });
+    await flushPendingRowPublication();
     startRequest.resolve(started);
     await start;
 
@@ -249,6 +254,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession({ updateUrl: false });
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
     await controller.send("recover after navigation");
@@ -302,8 +308,10 @@ describe("SessionController pending starts", () => {
     );
 
     const firstStart = controller.startSession();
+    await flushPendingRowPublication();
     const firstTemporaryId = state.selectedSession?.id;
     const secondStart = controller.startSession();
+    await flushPendingRowPublication();
     const secondTemporaryId = state.selectedSession?.id;
     if (firstTemporaryId === undefined || secondTemporaryId === undefined) throw new Error("Expected two pending sessions");
 
@@ -343,6 +351,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
 
     expect(state.sessions.map((session) => session.id)).toEqual([temporaryId]);
@@ -374,6 +383,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     controller.applyGlobalEvent({ type: "session.created", session: started });
     controller.applyGlobalEvent({ type: "session.created", session: otherClientSession });
@@ -409,6 +419,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     await controller.refreshCurrentWorkspaceSessions();
 
@@ -443,8 +454,10 @@ describe("SessionController pending starts", () => {
     );
 
     const firstStart = controller.startSession();
+    await flushPendingRowPublication();
     const firstTemporaryId = state.selectedSession?.id;
     const secondStart = controller.startSession();
+    await flushPendingRowPublication();
     const secondTemporaryId = state.selectedSession?.id;
 
     expect(startResolvers).toHaveLength(2);
@@ -488,6 +501,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
     saveDraft(sessionKey(temporaryId), "draft text");
@@ -551,6 +565,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected a temporary session id");
 
@@ -595,6 +610,7 @@ describe("SessionController pending starts", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
     await controller.send("queued before discard");
@@ -613,3 +629,11 @@ describe("SessionController pending starts", () => {
     expect(state.selectedSession).toBeUndefined();
   });
 });
+
+/** The + New Work flow probes the unit supervisor before publishing the
+ * pending row (the path must be fixed before navigation selection is
+ * captured). One macrotask lets that probe settle; the deferred backend
+ * start used by these tests remains unresolved. */
+async function flushPendingRowPublication(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}

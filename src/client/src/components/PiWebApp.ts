@@ -181,6 +181,17 @@ export class PiWebApp extends LitElement {
       navigateToSession: (session, options) => this.navigateToSessionFromController(session, options),
       captureNavigation: () => navigationSelectionFromState(this.state),
       beginNavigationOperation: (scope) => this.beginNavigationOperation(scope),
+      waitForWorkspaceListing: async (cwd, machineId) => {
+        const projectId = this.state.selectedProject?.id;
+        if (projectId === undefined) return false;
+        for (let attempt = 0; attempt < 10; attempt++) {
+          if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2_000));
+          await this.workspaces.refreshSelectedProjectTopology();
+          if (this.state.workspacesByProjectId[projectId]?.some((workspace) => workspace.path === cwd) === true) return true;
+          if (machineId !== selectedMachineId(this.state)) return false;
+        }
+        return false;
+      },
       onSelectedSessionReady: ({ machineId, session }) => {
         void this.commitReadyChatAfterRender(machineId, session);
       },
@@ -1835,6 +1846,9 @@ export class PiWebApp extends LitElement {
     deleteWorkspace: (workspace: Workspace) => { void this.deleteWorkspace(workspace); },
     archivedCollapsed: () => { void this.sessions.clearSelectionAfterArchivedCollapse(); },
     startSession: () => this.startSessionFromNavigation(),
+    sessionMenuOpen: (session: SessionInfo) => { void this.inspectUnitMenuSession(session); },
+    startSessionAt: (path: string) => { void this.startSessionAtFromNavigation(path); },
+    addWorktree: (session: SessionInfo) => { void this.sessions.addWorktree(session); },
     selectSession: (session: SessionInfo) => this.selectNavigationItem("sessions", "chat", () => this.selectSessionFromNavigation(session)),
     markSessionRead: (session: SessionInfo) => { this.markSessionsRead([session]); },
     markSessionsRead: (sessions: SessionInfo[]) => { this.markSessionsRead(sessions); },
@@ -1901,6 +1915,10 @@ export class PiWebApp extends LitElement {
         .onDeleteWorkspace=${this.navigationActions.deleteWorkspace}
         .onArchivedCollapsed=${this.navigationActions.archivedCollapsed}
         .onStartSession=${this.navigationActions.startSession}
+        .unitMenuCwd=${this.unitMenuCwd}
+        .onSessionMenuOpen=${this.navigationActions.sessionMenuOpen}
+        .onStartSessionAt=${this.navigationActions.startSessionAt}
+        .onAddWorktree=${this.navigationActions.addWorktree}
         .onSelectSession=${this.navigationActions.selectSession}
         .onMarkSessionRead=${this.navigationActions.markSessionRead}
         .onMarkSessionsRead=${this.navigationActions.markSessionsRead}
@@ -1938,6 +1956,22 @@ export class PiWebApp extends LitElement {
     await this.focusNavigationTarget(nextTarget, isCurrentSelection);
   }
 
+  @state() private unitMenuCwd: string | undefined = undefined;
+
+  /** Menu-open unit check: unit rows gain "New chat on this worktree" and
+   * "Add worktree"; everything else keeps the plain menu. */
+  private async inspectUnitMenuSession(session: SessionInfo): Promise<void> {
+    const isUnit = await this.sessions.isSupervisorUnitPath(session.cwd);
+    this.unitMenuCwd = isUnit ? session.cwd : undefined;
+  }
+
+  private async startSessionAtFromNavigation(path: string): Promise<void> {
+    const seq = ++this.navigationSelectionSeq;
+    const isCurrentSelection = () => seq === this.navigationSelectionSeq;
+    this.navigationSections.advanceAfterSelection("sessions");
+    await this.startSessionAndOpenChat(isCurrentSelection, path);
+  }
+
   private async startSessionFromNavigation(): Promise<void> {
     const seq = ++this.navigationSelectionSeq;
     const isCurrentSelection = () => seq === this.navigationSelectionSeq;
@@ -1946,7 +1980,7 @@ export class PiWebApp extends LitElement {
     await this.startSessionAndOpenChat(isCurrentSelection);
   }
 
-  private async startSessionAndOpenChat(shouldComplete: () => boolean = () => true): Promise<void> {
+  private async startSessionAndOpenChat(shouldComplete: () => boolean = () => true, path?: string): Promise<void> {
     // Open Chat before publishing the creation token; completion owns only
     // that token and leaves subsequent surface navigation untouched.
     const navigationSeq = this.navigationSelectionSeq;
@@ -1955,7 +1989,7 @@ export class PiWebApp extends LitElement {
     const machineId = selectedMachineId(this.state);
     if (isCurrent()) await this.focusChatComposer(isCurrent);
     if (!isCurrent()) return;
-    const start = this.sessions.startSession().catch((error: unknown) => {
+    const start = this.sessions.startSession({ cwd: path }).catch((error: unknown) => {
       if (workspace === undefined) return;
       this.browserErrors.report(workspaceBrowserErrorScope(machineId, workspace.projectId, workspace.id), String(error));
     });

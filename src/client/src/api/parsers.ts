@@ -2119,6 +2119,26 @@ export function parseReloaded(value: unknown): { reloaded: true } {
   return { reloaded: true };
 }
 
+export interface SupervisorUnitLookup {
+  unit?: string;
+}
+
+export function parseSupervisorUnitLookup(value: unknown): SupervisorUnitLookup {
+  if (!isRecord(value)) return {};
+  const unit: unknown = value["unit"];
+  return typeof unit === "string" ? { unit } : {};
+}
+
+export function parseSupervisorUnitCreated(value: unknown): { unitName: string; worktreePath: string } {
+  const record = requireRecord(value);
+  return { unitName: requireString(record, "unitName"), worktreePath: requireString(record, "worktreePath") };
+}
+
+export function parseSupervisorWorktreeCreated(value: unknown): { worktreePath: string } {
+  const record = requireRecord(value);
+  return { worktreePath: requireString(record, "worktreePath") };
+}
+
 function optionalBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   const value = record[key];
   if (value === undefined) return undefined;

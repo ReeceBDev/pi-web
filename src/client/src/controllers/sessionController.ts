@@ -65,6 +65,22 @@ export interface SessionControllerDependencies {
   replacePromptEditorText?: (replacement: PromptEditorTextReplacement) => void | Promise<void>;
   onSelectedSessionReady?: (selection: SelectedSessionReady) => void;
   onModelScopeChanged?: (revision: number) => void;
+  /** Bounded refresh of the selected project's workspace catalog until `cwd`
+   * is listed. Unit sessions create catalog entries outside this controller. */
+  waitForWorkspaceListing?: (cwd: string, machineId: string) => Promise<boolean>;
+}
+
+function isUnitWorktreePath(path: string): boolean {
+  return path.includes("/units/") && path.includes("/worktrees/");
+}
+
+function listedWorkspaceForPath(state: { selectedProject?: { id: string } | undefined; workspacesByProjectId: Record<string, Workspace[]> }, path: string): Workspace | undefined {
+  const projectId = state.selectedProject?.id;
+  return projectId === undefined ? undefined : state.workspacesByProjectId[projectId]?.find((workspace) => workspace.path === path);
+}
+
+function shellWorkspaceForPath(selected: Workspace | undefined, path: string): Workspace | undefined {
+  return selected === undefined ? undefined : { ...selected, path };
 }
 
 interface BulkSessionMutationResult {
@@ -138,6 +154,7 @@ export class SessionController {
   private readonly replacePromptEditorText: SessionControllerDependencies["replacePromptEditorText"];
   private readonly onSelectedSessionReady: SessionControllerDependencies["onSelectedSessionReady"];
   private readonly onModelScopeChanged: SessionControllerDependencies["onModelScopeChanged"];
+  private readonly waitForWorkspaceListing: SessionControllerDependencies["waitForWorkspaceListing"];
   private readonly captureNavigation: SessionControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: SessionControllerDependencies["beginNavigationOperation"];
   private readonly browserErrors: BrowserErrorReporter;
@@ -181,6 +198,7 @@ export class SessionController {
     this.replacePromptEditorText = deps.replacePromptEditorText;
     this.onSelectedSessionReady = deps.onSelectedSessionReady;
     this.onModelScopeChanged = deps.onModelScopeChanged;
+    this.waitForWorkspaceListing = deps.waitForWorkspaceListing;
     this.captureNavigation = deps.captureNavigation;
     this.beginNavigationOperation = deps.beginNavigationOperation;
     this.browserErrors = new BrowserErrorReporter(getState, setState);
@@ -251,8 +269,8 @@ export class SessionController {
     await this.clearSessionAfterNavigation(this.navigationSelection());
   }
 
-  async startSession(options?: { updateUrl?: boolean | undefined }) {
-    const workspace = this.getState().selectedWorkspace;
+  async startSession(options?: { updateUrl?: boolean | undefined; cwd?: string | undefined }) {
+    const workspace = await this.workspaceForNewSession(options?.cwd);
     if (!workspace) return;
     const machineId = selectedMachineId(this.getState());
     const pendingUrlPublished = options?.updateUrl !== false;
@@ -271,9 +289,62 @@ export class SessionController {
     pending.navigation = this.beginNavigationOperation?.(PENDING_SESSION_START_SCOPE);
     try {
       const session = await this.api.startSession(workspace.path, machineId, pending.tempId);
+      // Unit sessions create their workspace outside the catalog; the selection
+      // reconcile routes through it, so wait (bounded) for the listing to land
+      // before resolving — otherwise the pending row is deselected mid-reconcile
+      // and queued sends die.
+      if (isUnitWorktreePath(session.cwd)) await this.waitForWorkspaceListing?.(session.cwd, machineId);
       await this.resolvePendingSessionStart(pending.tempId, session);
     } catch (error) {
       this.failPendingSessionStart(pending.tempId, error);
+    }
+  }
+
+  /** + New Work on the local machine: a non-unit workspace first becomes a unit
+   * (session supervisor create) so the new chat runs in the unit's primary
+   * worktree. Supervisor failures fall back to the plain local session. The
+   * path swap happens before the pending start so selection, navigation, and
+   * queued sends all target the unit workspace from the first published row. */
+  private async workspaceForNewSession(cwd: string | undefined): Promise<Workspace | undefined> {
+    const state = this.getState();
+    const listed = cwd === undefined
+      ? state.selectedWorkspace
+      : listedWorkspaceForPath(state, cwd) ?? shellWorkspaceForPath(state.selectedWorkspace, cwd);
+    if (!listed) return undefined;
+    const machineId = selectedMachineId(state);
+    if (machineId !== "local" || isUnitWorktreePath(listed.path)) return listed;
+    try {
+      const unit = await this.api.supervisorUnit(listed.path);
+      if (unit.unit !== undefined) return listed;
+      const created = await this.api.supervisorCreateUnit(listed.path);
+      return { ...listed, path: created.worktreePath };
+    } catch {
+      return listed;
+    }
+  }
+
+  /** Open a new chat in an existing unit worktree (sessions bar menu action). */
+  async startSessionAt(path: string): Promise<void> {
+    await this.startSession({ cwd: path });
+  }
+
+  /** Create an additional worktree in the unit owning the session's cwd, then
+   * open a new chat there. */
+  async addWorktree(session: SessionInfo): Promise<void> {
+    try {
+      const created = await this.api.supervisorAddWorktree(session.cwd);
+      await this.startSessionAt(created.worktreePath);
+    } catch (error) {
+      this.setState({ error: errorMessage(error) });
+    }
+  }
+
+  /** True when the supervisor owns the session's cwd (sessions bar menu gate). */
+  async isSupervisorUnitPath(cwd: string): Promise<boolean> {
+    try {
+      return (await this.api.supervisorUnit(cwd)).unit !== undefined;
+    } catch {
+      return false;
     }
   }
 

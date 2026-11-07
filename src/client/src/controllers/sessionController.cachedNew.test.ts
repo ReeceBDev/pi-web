@@ -303,6 +303,7 @@ describe("SessionController cached-new sessions", () => {
     );
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const tempId = state.selectedSession?.id;
     expect(tempId).toMatch(/^creating:/);
     // The row is durable before the backend answers, so a discarded mobile tab
@@ -377,3 +378,11 @@ describe("SessionController cached-new sessions", () => {
     expect(loadCachedNewSessions(storage)).toEqual([]);
   });
 });
+
+/** The + New Work flow probes the unit supervisor before publishing the
+ * pending row (the path must be fixed before navigation selection is
+ * captured). One macrotask lets that probe settle; the deferred backend
+ * start used by these tests remains unresolved. */
+async function flushPendingRowPublication(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}

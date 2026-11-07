@@ -65,6 +65,11 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ attribute: false }) onMarkReadMany?: (sessions: SessionInfo[]) => void | Promise<void>;
   @property({ attribute: false }) onReload?: (session: SessionInfo) => void;
   @property({ attribute: false }) onCleanup?: () => void;
+  /** The open-menu row's cwd when the supervisor owns it (unit session). */
+  @property({ attribute: false }) unitMenuCwd?: string | undefined;
+  @property({ attribute: false }) onSessionMenuOpen?: (session: SessionInfo) => void;
+  @property({ attribute: false }) onStartAt?: (path: string) => void;
+  @property({ attribute: false }) onAddWorktree?: (session: SessionInfo) => void;
 
   @state() private openMenuSessionId: string | undefined;
   @state() private menuStyle = "";
@@ -225,7 +230,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   private renderStartButton() {
     const title = this.startingCount > 0 ? "Start another session" : "Start a new session";
-    return html`<button class="start-session-button" title=${title} aria-label=${title} ?disabled=${!this.canStart} @click=${(event: MouseEvent) => { event.stopPropagation(); this.onStart?.(); }}>+</button>`;
+    return html`<button class="start-session-button" title=${title} aria-label=${title} ?disabled=${!this.canStart} @click=${(event: MouseEvent) => { event.stopPropagation(); this.onStart?.(); }}>+ New Work</button>`;
   }
 
   private renderStartingSession() {
@@ -329,7 +334,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
           ${this.renderActivity(indicatorKind, unread)}
         </div>
         <div class="action-menu">
-          <button class="action-menu-toggle" title="Session actions" @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(session.id, event.currentTarget); }}>⋯</button>
+          <button class="action-menu-toggle" title="Session actions" @click=${(event: MouseEvent) => { event.stopPropagation(); this.toggleMenu(session, event.currentTarget); }}>⋯</button>
           ${this.openMenuSessionId === session.id ? html`
             <div class="action-menu-panel" style=${this.menuStyle}>
               ${session.archived === true
@@ -341,6 +346,10 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
                   ? html`<button title="Delete transient new session" @click=${() => { this.openMenuSessionId = undefined; this.onDelete?.(session); }}>Delete</button>`
                   : html`
                     ${this.unreadSessionIds.has(session.id) ? html`<button title="Mark session as read" @click=${() => { this.openMenuSessionId = undefined; this.onMarkRead?.(session); }}>Mark as read</button>` : null}
+                    ${this.unitMenuCwd === session.cwd ? html`
+                      <button title="New chat on this worktree" @click=${() => { this.openMenuSessionId = undefined; this.onStartAt?.(session.cwd); }}>New chat on this worktree</button>
+                      <button title="Add worktree" @click=${() => { this.openMenuSessionId = undefined; this.onAddWorktree?.(session); }}>Add worktree</button>
+                    ` : null}
                     ${canArchive ? html`
                       <button title="Archive session" @click=${() => { this.openMenuSessionId = undefined; this.onArchive?.(session); }}>Archive</button>
                       ${descendantCount > 0 ? html`<button title="Archive this session and its descendants" @click=${() => { this.openMenuSessionId = undefined; this.confirmArchiveWithDescendants(session, descendantCount); }}>Archive with descendants (${descendantCount})</button>` : null}
@@ -471,13 +480,14 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     if (this.selectionScopes.has("current") && !this.sessions.some((session) => session.archived !== true)) this.closeSelection("current");
   }
 
-  private toggleMenu(sessionId: string, target: EventTarget | null) {
-    if (this.openMenuSessionId === sessionId) {
+  private toggleMenu(session: SessionInfo, target: EventTarget | null) {
+    if (this.openMenuSessionId === session.id) {
       this.openMenuSessionId = undefined;
       return;
     }
     this.menuStyle = actionMenuPanelStyle(target, { constrainTo: "viewport" });
-    this.openMenuSessionId = sessionId;
+    this.openMenuSessionId = session.id;
+    this.onSessionMenuOpen?.(session);
   }
 
   private toggleArchived() {

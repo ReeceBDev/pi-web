@@ -226,6 +226,53 @@ it("orders archived rows by activity immediately after archiving while preservin
   expect([...root.querySelectorAll<HTMLElement>(".action-row.archived")].map((row) => row.title)).toEqual([newer.path, old.path, child.path]);
 });
 
+it("renders the start button with the visible + New Work label", async () => {
+  const list = sessionList([session("s")], new Set());
+  list.canStart = true;
+  document.body.append(list);
+  await list.updateComplete;
+  const button = list.shadowRoot?.querySelector<HTMLButtonElement>(".start-session-button");
+  expect(button?.textContent.trim()).toBe("+ New Work");
+});
+
+it("shows unit menu actions only for the unit-owned open menu row", async () => {
+  const unitRow = session("unit", { cwd: "/units/pi-9/worktrees/primary" });
+  const plainRow = session("plain", { cwd: "/repo" });
+  const list = sessionList([unitRow, plainRow], new Set());
+  const menuOpen = vi.fn();
+  const startAt = vi.fn();
+  list.onSessionMenuOpen = menuOpen;
+  list.onStartAt = startAt;
+  list.unitMenuCwd = unitRow.cwd;
+  document.body.append(list);
+  await list.updateComplete;
+
+  await openSessionMenu(list, unitRow.id);
+  expect(menuOpen).toHaveBeenCalledWith(unitRow);
+  const buttons = [...(list.shadowRoot?.querySelectorAll<HTMLButtonElement>(".action-menu-panel button") ?? [])].map((button) => button.textContent.trim());
+  expect(buttons).toContain("New chat on this worktree");
+  expect(buttons).toContain("Add worktree");
+
+  const startButton = [...(list.shadowRoot?.querySelectorAll<HTMLButtonElement>(".action-menu-panel button") ?? [])].find((button) => button.textContent.trim() === "New chat on this worktree");
+  startButton?.click();
+  await list.updateComplete;
+  expect(startAt).toHaveBeenCalledWith(unitRow.cwd);
+});
+
+it("keeps the plain menu for non-unit rows even when a unit menu was open before", async () => {
+  const unitRow = session("unit", { cwd: "/units/pi-9/worktrees/primary" });
+  const plainRow = session("plain", { cwd: "/repo" });
+  const list = sessionList([unitRow, plainRow], new Set());
+  list.unitMenuCwd = unitRow.cwd;
+  document.body.append(list);
+  await list.updateComplete;
+
+  await openSessionMenu(list, plainRow.id);
+  const buttons = [...(list.shadowRoot?.querySelectorAll<HTMLButtonElement>(".action-menu-panel button") ?? [])].map((button) => button.textContent.trim());
+  expect(buttons).not.toContain("New chat on this worktree");
+  expect(buttons).not.toContain("Add worktree");
+});
+
 function rowSummaries(rows: ReturnType<typeof sessionRowsForCurrentTree>) {
   return rows.map((row) => ({ id: row.session.id, depth: row.depth, hasMissingParent: row.hasMissingParent }));
 }

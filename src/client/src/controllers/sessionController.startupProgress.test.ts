@@ -58,6 +58,7 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.current.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
 
@@ -83,6 +84,7 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.current.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
     const beforeStartupProgress = isSessionActive(state.current.status, state.current.activity);
@@ -105,6 +107,7 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.current.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
     controller.applyGlobalEvent({ type: "session.startup", startupToken: temporaryId, activity: startupActivity() });
@@ -129,6 +132,7 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     await controller.send("queued while starting");
     const temporaryId = state.current.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
@@ -189,6 +193,7 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.current.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
 
@@ -213,6 +218,7 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.current.selectedSession?.id;
     if (temporaryId === undefined) throw new Error("Expected temporary session id");
 
@@ -237,8 +243,10 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const firstId = state.current.selectedSession?.id;
     const secondStart = controller.startSession();
+    await flushPendingRowPublication();
     const secondId = state.current.selectedSession?.id;
     if (firstId === undefined || secondId === undefined || firstId === secondId) throw new Error("Expected two distinct temporary session ids");
 
@@ -259,6 +267,7 @@ describe("SessionController session startup progress", () => {
     const { controller, startRequest, startCalls } = pendingStartController(state);
 
     const start = controller.startSession();
+    await flushPendingRowPublication();
     const temporaryId = state.current.selectedSession?.id;
 
     expect(startCalls).toEqual([{ cwd: workspace.path, machineId: "local", startupToken: temporaryId }]);
@@ -267,3 +276,11 @@ describe("SessionController session startup progress", () => {
     await start;
   });
 });
+
+/** The + New Work flow probes the unit supervisor before publishing the
+ * pending row (the path must be fixed before navigation selection is
+ * captured). One macrotask lets that probe settle; the deferred backend
+ * start used by these tests remains unresolved. */
+async function flushPendingRowPublication(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}

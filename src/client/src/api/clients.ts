@@ -36,6 +36,9 @@ import {
   parseProjectCatalog,
   parseProject,
   parseReloaded,
+  parseSupervisorUnitCreated,
+  parseSupervisorUnitLookup,
+  parseSupervisorWorktreeCreated,
   parseRestored,
   parseSavedAttachments,
   parseSessionBulkArchiveResponse,
@@ -379,6 +382,15 @@ export const trustApi = {
   setWorkspaceTrust: (projectId: string, workspaceId: string, trusted: boolean, machineId = "local") => request(workspaceTrustPath(machineId, projectId, workspaceId), parseWorkspaceTrustResponse, { method: "PUT", body: JSON.stringify({ trusted }) }),
 };
 
+export const supervisorApi = {
+  /** Resolve the unit owning a cwd; {} when the path is outside any unit. */
+  supervisorUnit: (cwd: string) => request(`api/supervisor/unit?${new URLSearchParams({ cwd }).toString()}`, parseSupervisorUnitLookup),
+  /** Create a unit for a source checkout; returns the primary worktree path. */
+  supervisorCreateUnit: (source: string) => request("api/supervisor/create", parseSupervisorUnitCreated, { method: "POST", body: JSON.stringify({ source }) }),
+  /** Create an additional worktree inside the unit owning cwd. */
+  supervisorAddWorktree: (cwd: string) => request("api/supervisor/worktree", parseSupervisorWorktreeCreated, { method: "POST", body: JSON.stringify({ cwd }) }),
+} as const;
+
 export const api = {
   ...piWebApi,
   ...machinesApi,
@@ -391,5 +403,6 @@ export const api = {
   ...sessionsApi,
   ...filesApi,
   ...trustApi,
+  ...supervisorApi,
 
 };

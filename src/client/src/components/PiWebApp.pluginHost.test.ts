@@ -1675,6 +1675,7 @@ describe("PiWebApp plugin host", () => {
     Reflect.set(api, "startSession", () => started.promise);
 
     const starting = sessions.startSession();
+    await flushPendingRowPublication();
     const token = browser.url.searchParams.get("session");
     expect(token).toMatch(/^creating:[0-9a-f]{32}$/);
     expect(appState(app).selectedSession?.id).toBe(token);
@@ -4386,4 +4387,12 @@ function testPluginDeclaration(registration: PiWebPluginRegistration): PiWebPlug
 
 function manifestEntry(id: string): PluginManifestEntry {
   return { id, module: `./${id}/plugin.js`, machineSpecific: false };
+}
+
+/** The + New Work flow probes the unit supervisor before publishing the
+ * pending row (the path must be fixed before navigation selection is
+ * captured). One macrotask lets that probe settle; the deferred backend
+ * start used by these tests remains unresolved. */
+async function flushPendingRowPublication(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
