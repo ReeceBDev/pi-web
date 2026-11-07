@@ -106,6 +106,7 @@ import { plainTextTheme } from "./plainTextTheme.js";
 import { projectTranscriptMarkdown } from "./transcriptMarkdown.js";
 import { SessionUnreadStore, type SessionUnreadMutation } from "./sessionUnreadStore.js";
 import { applyEnabledModelToggle, catalogWithEnabledFirst, modelScopeId, persistedEnabledModelPatterns, resolveEnabledModelIds, resolveSessionModelOptions, scopedModelsFromEnabledIds, type EnabledModelCatalogEntry } from "./sessionModelScope.js";
+import { unitPromptGate } from "./unitPromptGate.js";
 
 /**
  * Minimal structured-logging seam, shaped like Fastify's logger so sessiond can
@@ -2707,6 +2708,7 @@ export class PiSessionService implements SessionRouteService {
     const images = (await attachmentsToInlineImages(parsedAttachments)).map((entry) => entry.image);
     await this.assertWritable(ref);
     const session = await this.getOrOpen(ref);
+    await unitPromptGate.gate(session.sessionManager.getCwd());
     this.assertTreeNavigationInactive(session, "send a prompt");
     this.maybeGenerateSessionName(session, promptText);
     const isQueued = session.isStreaming || session.isCompacting;
