@@ -37,6 +37,8 @@ import {
 } from "./activeAgentProfileProvider.js";
 import { MachineService } from "./machines/machineService.js";
 import { registerMachineRoutes } from "./machines/machineRoutes.js";
+import { registerSupervisorRoutes } from "./machines/supervisorRoutes.js";
+import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
 import { registerPluginBackendChannelProxyRoutes } from "./plugins/pluginBackendChannelProxyRoutes.js";
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
@@ -48,6 +50,8 @@ export interface AppDependencies {
   projects?: ProjectService;
   workspaceCatalog?: WorkspaceCatalog;
   machines?: MachineService;
+  /** Session supervisor proxy target; tests inject a fake client. */
+  unitSupervisor?: UnitSupervisorDelegate;
   sessionDaemon?: SessionProxyDaemon;
   agentProfileProvider?: ActiveAgentProfileProvider;
   piWebPlugins?: Pick<PiWebPluginService, "manifest" | "plugins" | "readAsset">;
@@ -273,6 +277,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
 
   registerMachineRoutes(app, machines);
   registerMachinePluginProxyRoutes(app, machines);
+  registerSupervisorRoutes(app, deps.unitSupervisor);
 
   registerLocalProjectRoutes(app, projects, workspaces, "/api", { config: configService, sessionDaemon });
   registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService, sessionDaemon });

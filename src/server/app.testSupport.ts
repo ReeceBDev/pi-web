@@ -10,6 +10,7 @@ import { buildApp } from "./app.js";
 import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import type { MachineClient } from "./machines/machineClient.js";
+import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
 import { MachineService } from "./machines/machineService.js";
 import { MachineStore } from "./machines/machineStore.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
@@ -23,6 +24,7 @@ interface AppTestContext {
   readonly tempDir: string;
   readonly projectDir: string;
   remoteClient: MachineClient | undefined;
+  unitSupervisor: UnitSupervisorDelegate | undefined;
   readonly sessionDaemonRequests: CapturedSessionDaemonRequest[];
   readonly piPackageRequests: CapturedPiPackageRequest[];
   readonly workspaceCatalog: AppTestWorkspaceCatalog;
@@ -34,6 +36,7 @@ let app: FastifyInstance | undefined;
 let tempDir: string | undefined;
 let projectDir: string | undefined;
 let remoteClient: MachineClient | undefined;
+let unitSupervisor: UnitSupervisorDelegate | undefined;
 let sessionDaemonRequests: CapturedSessionDaemonRequest[] = [];
 let piPackageRequests: CapturedPiPackageRequest[] = [];
 let workspaceCatalog: AppTestWorkspaceCatalog | undefined;
@@ -58,6 +61,12 @@ export const appTestContext: AppTestContext = {
   },
   set remoteClient(client) {
     remoteClient = client;
+  },
+  get unitSupervisor() {
+    return unitSupervisor;
+  },
+  set unitSupervisor(client) {
+    unitSupervisor = client;
   },
   get sessionDaemonRequests() {
     return sessionDaemonRequests;
@@ -88,6 +97,7 @@ export function registerAppTestHooks(): void {
     tempDir = await realpath(await mkdtemp(join(tmpdir(), "pi-web-app-test-")));
     projectDir = join(tempDir, "project");
     remoteClient = undefined;
+    unitSupervisor = undefined;
     sessionDaemonRequests = [];
     piPackageRequests = [];
     piWebConfig = {};
@@ -98,6 +108,7 @@ export function registerAppTestHooks(): void {
     app = await buildApp({
       projects,
       workspaceCatalog,
+      unitSupervisor: delegatingUnitSupervisor(),
       machines: new MachineService(new MachineStore(join(tempDir, "machines.json")), {
         remoteClientFactory: () => {
           if (remoteClient === undefined) throw new Error("No remote machine client configured");
@@ -160,6 +171,19 @@ export function registerAppTestHooks(): void {
     if (appToClose !== undefined) await appToClose.close();
     if (tempDirToRemove !== undefined) await rm(tempDirToRemove, { recursive: true, force: true });
   });
+}
+
+function delegatingUnitSupervisor(): UnitSupervisorDelegate {
+  const delegate = (): UnitSupervisorDelegate => {
+    if (unitSupervisor === undefined) throw new Error("No unit supervisor configured");
+    return unitSupervisor;
+  };
+  return {
+    create: (body) => delegate().create(body),
+    addWorktree: (body) => delegate().addWorktree(body),
+    unitByCwd: (cwd) => delegate().unitByCwd(cwd),
+    unitStatus: (query) => delegate().unitStatus(query),
+  };
 }
 
 function fakePiWebPluginAsset(pluginId: string, assetPath: string): Promise<{ content: Buffer; contentType: string } | undefined> {
