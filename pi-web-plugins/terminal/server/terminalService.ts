@@ -1,9 +1,56 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { statSync } from "node:fs";
 import * as pty from "node-pty";
+import { dirname, join, resolve } from "node:path";
 import type { ServerPluginNoticeInput } from "@jmfederico/pi-web/server-plugin-api";
 
 const MAX_REPLAY_BUFFER = 200_000;
+
+/** Resolves a terminal cwd to its unit's profile by walking upward for a
+ * directory that contains both profile.json and worktrees/ (cached per cwd).
+ * Unit cwds spawn through nono so the profile applies at process start;
+ * non-unit cwds keep the exact previous spawn. */
+const unitProfileCache = new Map<string, string | undefined>();
+
+export function unitProfileFor(cwd: string): string | undefined {
+  if (unitProfileCache.has(cwd)) return unitProfileCache.get(cwd);
+  let profile: string | undefined;
+  try {
+    let dir = resolve(cwd);
+    for (;;) {
+      if (existsUnitProfile(dir)) {
+        profile = join(dir, "profile.json");
+        break;
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch {
+    profile = undefined;
+  }
+  unitProfileCache.set(cwd, profile);
+  return profile;
+}
+
+function existsUnitProfile(dir: string): boolean {
+  try {
+    return statSync(join(dir, "profile.json")).isFile() && statSync(join(dir, "worktrees")).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** The program + argv a terminal for `cwd` should spawn. Unit sessions run
+ * through nono (profile-scoped sandboxing at process start); everything else
+ * spawns the plain interactive shell. */
+export function unitSpawnCommand(cwd: string, shell: string, shellArgs: readonly string[]): { program: string; args: string[] } {
+  const profile = unitProfileFor(cwd);
+  if (profile === undefined) return { program: shell, args: [...shellArgs] };
+  const nono = process.env["PI_WEB_UNIT_NONO_BIN"] ?? "nono";
+  return { program: nono, args: ["run", "--profile", profile, "--", shell, ...shellArgs] };
+}
 
 export type TerminalCommandRunStatus = "queued" | "running" | "succeeded" | "failed";
 
@@ -247,7 +294,8 @@ export class TerminalService {
     record.buffer = trimReplayBuffer(record.buffer + marker);
     record.events.emit("output", marker);
     const shell = process.env["SHELL"] ?? "/bin/bash";
-    record.pty = pty.spawn(shell, interactiveShellArgs(shell), {
+    const spawned = unitSpawnCommand(record.cwd, shell, interactiveShellArgs(shell));
+    record.pty = pty.spawn(spawned.program, spawned.args, {
       name: "xterm-256color",
       cwd: record.cwd,
       cols: 100,
@@ -287,7 +335,8 @@ export class TerminalService {
     const id = options.id ?? randomUUID();
     const createdAt = new Date().toISOString();
     const shell = process.env["SHELL"] ?? "/bin/bash";
-    const terminal = pty.spawn(shell, options.shellArgs, {
+    const spawned = unitSpawnCommand(options.cwd, shell, options.shellArgs);
+    const terminal = pty.spawn(spawned.program, spawned.args, {
       name: "xterm-256color",
       cwd: options.cwd,
       cols: options.cols ?? 100,

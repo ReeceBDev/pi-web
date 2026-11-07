@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ServerPluginNoticeInput } from "@jmfederico/pi-web/server-plugin-api";
-import { interactiveShellArgs, osc7PromptCommandValue, TerminalService, type TerminalActivitySink, type TerminalInfo, type TerminalWorkspaceScope } from "./terminalService";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { interactiveShellArgs, osc7PromptCommandValue, TerminalService, unitProfileFor, unitSpawnCommand, type TerminalActivitySink, type TerminalInfo, type TerminalWorkspaceScope } from "./terminalService";
 
 describe("interactive shell arguments", () => {
   it.each([
@@ -445,3 +446,48 @@ function terminalExit(service: TerminalService, terminalId: string): Promise<str
 function scope(cwd = process.cwd()): TerminalWorkspaceScope {
   return { projectId: "p1", workspaceId: "w1", cwd };
 }
+
+describe("unit profile resolution", () => {
+  const tempRoots: string[] = [];
+
+  afterEach(() => {
+    for (const root of tempRoots.splice(0)) void rm(root, { recursive: true, force: true });
+  });
+
+  function tempUnitRoot(name: string, withProfile: boolean): string {
+    const root = mkdtempSync(join(tmpdir(), `pi-web-terminal-unit-${name}-`));
+    tempRoots.push(root);
+    if (withProfile) {
+      writeFileSync(join(root, "profile.json"), "{}", "utf8");
+      mkdirSync(join(root, "worktrees"));
+    }
+    return root;
+  }
+
+  it("walks upward from a unit worktree to its profile.json", () => {
+    const unitRoot = tempUnitRoot("walk", true);
+    const worktree = join(unitRoot, "worktrees", "primary");
+    mkdirSync(worktree, { recursive: true });
+
+    expect(unitProfileFor(worktree)).toBe(join(unitRoot, "profile.json"));
+  });
+
+  it("returns undefined outside any unit and for profile-only directories", () => {
+    const plain = tempUnitRoot("plain", false);
+
+    expect(unitProfileFor(plain)).toBeUndefined();
+    expect(unitProfileFor(join(tmpdir(), "pi-web-terminal-nowhere"))).toBeUndefined();
+  });
+
+  it("spawns unit terminals through nono and plain terminals through the shell", () => {
+    const unitRoot = tempUnitRoot("spawn", true);
+    const worktree = join(unitRoot, "worktrees", "primary");
+    mkdirSync(worktree, { recursive: true });
+    const outside = tempUnitRoot("outside", false);
+
+    expect(unitSpawnCommand(worktree, "/bin/bash", ["-l"]).args).toEqual([
+      "run", "--profile", join(unitRoot, "profile.json"), "--", "/bin/bash", "-l",
+    ]);
+    expect(unitSpawnCommand(outside, "/bin/bash", ["-l"])).toEqual({ program: "/bin/bash", args: ["-l"] });
+  });
+});
