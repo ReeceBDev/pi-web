@@ -1,4 +1,6 @@
-import { basename, resolve } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import type {
   PiWebServerPlugin,
   ProjectInput,
@@ -11,6 +13,8 @@ import type {
   WorkspaceRemovePlan,
 } from "@jmfederico/pi-web/server-plugin-api";
 import { requestGitBackend } from "./git-backend.js";
+
+const UNIT_SCAN_TTL_MS = 3_000;
 
 const GIT_LOCAL_ENV_VARS = Object.freeze([
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -44,7 +48,11 @@ const plugin: PiWebServerPlugin = {
 
 export default plugin;
 
-export function createGitWorkspaceProvider(context: ServerPluginActivationContext): WorkspaceProvider {
+export function createGitWorkspaceProvider(
+  context: ServerPluginActivationContext,
+  options: { unitsRoot?: string } = {},
+): WorkspaceProvider {
+  const unitScan = createUnitScan(context, options.unitsRoot);
   return Object.freeze({
     fallback: true,
     async probe(project: ProjectInput, signal: AbortSignal): Promise<ProviderClaim> {
@@ -88,28 +96,38 @@ export function createGitWorkspaceProvider(context: ServerPluginActivationContex
       const selectable = worktrees
         .map(({ worktree, path }) => ({ worktree, path, isMain: path === mainWorkspacePath }))
         .filter(({ worktree, path, isMain }) => worktree.prunable !== true || isMain || path === project.path);
-      if (selectable.length === 0) return [singleGitWorkspace(project)];
+      const unitWorkspaces = unitWorkspacesFor(await unitScan(signal), [
+        mainRoot,
+        project.path,
+        ...selectable.map(({ path }) => path),
+      ]);
+      if (selectable.length === 0) {
+        return unitWorkspaces.length > 0 ? unitWorkspaces : [singleGitWorkspace(project)];
+      }
 
-      return selectable.map(({ worktree, path, isMain }) => {
-        const label = worktree.branch ?? (worktree.detached === true ? "detached" : basename(worktree.path) || worktree.path);
-        return {
-          key: path,
-          path,
-          label,
-          isMain,
-          data: {
-            worktreePath: worktree.path,
-            ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
-          },
-          publicMetadata: {
-            isGitRepo: true,
-            isGitWorktree: true,
-            ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
-            ...(worktree.detached === undefined ? {} : { detached: worktree.detached }),
-          },
-          ...(isMain ? {} : { removal: gitRemovalPresentation(label, path) }),
-        };
-      });
+      return [
+        ...selectable.map(({ worktree, path, isMain }) => {
+          const label = worktree.branch ?? (worktree.detached === true ? "detached" : basename(worktree.path) || worktree.path);
+          return {
+            key: path,
+            path,
+            label,
+            isMain,
+            data: {
+              worktreePath: worktree.path,
+              ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
+            },
+            publicMetadata: {
+              isGitRepo: true,
+              isGitWorktree: true,
+              ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
+              ...(worktree.detached === undefined ? {} : { detached: worktree.detached }),
+            },
+            ...(isMain ? {} : { removal: gitRemovalPresentation(label, path) }),
+          };
+        }),
+        ...unitWorkspaces,
+      ];
     },
     async prepareRemove({ project, workspace, signal }: ProviderRemoveContext): Promise<WorkspaceRemovePlan> {
       const privatePath = gitPrivateWorktreePath(workspace);
@@ -151,6 +169,107 @@ export function parseGitWorktreeList(stdout: string): GitWorktreeInfo[] {
     }
     return info.path === "" ? [] : [info];
   });
+}
+
+/** One checkout under ~/units/<unit>/worktrees/ that looks like a git clone.
+ * Unit sessions create these outside `git worktree list`, which is why the
+ * provider must scan for them: clone-based worktrees are invisible to the
+ * main repository's worktree registry. */
+export interface UnitWorktreeEntry {
+  path: string;
+  /** "<unit>/<worktree-name>" — stable and human-readable. */
+  label: string;
+  /** `git remote get-url origin` output; for unit clones this is the source
+   * checkout's filesystem path, which is how entries are matched to a project. */
+  origin: string;
+  /** Current branch name, "" when detached. */
+  branch: string;
+}
+
+export interface UnitScanDeps {
+  runGit(cwd: string, args: readonly string[]): Promise<{ stdout: string }>;
+}
+
+/** Scan ~/units/<unit>/worktrees/* for git checkouts, resolving each entry's
+ * origin URL and current branch. Entries that cannot be inspected are skipped;
+ * a missing or unreadable units root yields an empty result. */
+export async function scanUnitWorktrees(deps: UnitScanDeps, unitsRoot: string): Promise<UnitWorktreeEntry[]> {
+  let units: string[];
+  try {
+    units = readdirSync(unitsRoot);
+  } catch {
+    return [];
+  }
+  const found: UnitWorktreeEntry[] = [];
+  for (const unit of units) {
+    const worktreesRoot = join(unitsRoot, unit, "worktrees");
+    let children: string[];
+    try {
+      children = readdirSync(worktreesRoot);
+    } catch {
+      continue;
+    }
+    for (const child of children) {
+      const path = join(worktreesRoot, child);
+      if (!existsSync(join(path, ".git"))) continue;
+      try {
+        const origin = (await deps.runGit(path, ["remote", "get-url", "origin"])).stdout.trim();
+        const branch = (await deps.runGit(path, ["branch", "--show-current"])).stdout.trim();
+        found.push({ path, label: `${unit}/${child}`, origin, branch });
+      } catch {
+        continue;
+      }
+    }
+  }
+  return found;
+}
+
+/** Unit checkouts whose origin path belongs to this project's known checkout
+ * paths become provider workspaces of the project. Branch-less entries (fresh
+ * or detached checkouts) omit the branch fields rather than emitting empty
+ * strings. */
+export function unitWorkspacesFor(entries: readonly UnitWorktreeEntry[], knownPaths: readonly string[]): ProviderWorkspace[] {
+  const known = new Set(knownPaths.map((path) => resolve(path)));
+  const seen = new Set<string>();
+  const workspaces: ProviderWorkspace[] = [];
+  for (const entry of entries) {
+    if (!known.has(resolve(entry.origin)) || seen.has(entry.path)) continue;
+    seen.add(entry.path);
+    workspaces.push({
+      key: entry.path,
+      path: entry.path,
+      label: entry.label,
+      isMain: false,
+      data: {
+        worktreePath: entry.path,
+        ...(entry.branch === "" ? {} : { branch: entry.branch }),
+      },
+      publicMetadata: {
+        isGitRepo: true,
+        isGitWorktree: true,
+        ...(entry.branch === "" ? {} : { branch: entry.branch }),
+      },
+    });
+  }
+  return workspaces;
+}
+
+/** Bounded-rate unit scan shared by every list() call: at most one filesystem
+ * + git sweep per UNIT_SCAN_TTL_MS, result cached in the provider closure. */
+function createUnitScan(context: ServerPluginActivationContext, unitsRoot = join(homedir(), "units")) {
+  let cache: { at: number; value: UnitWorktreeEntry[] } = { at: 0, value: [] };
+  return async (signal: AbortSignal): Promise<UnitWorktreeEntry[]> => {
+    if (Date.now() - cache.at >= UNIT_SCAN_TTL_MS) {
+      cache = {
+        at: Date.now(),
+        value: await scanUnitWorktrees(
+          { runGit: async (cwd, args) => await runGit(context, cwd, args, signal) },
+          unitsRoot,
+        ),
+      };
+    }
+    return cache.value;
+  };
 }
 
 function singleGitWorkspace(project: ProjectInput): ProviderWorkspace {

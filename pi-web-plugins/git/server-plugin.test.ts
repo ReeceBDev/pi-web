@@ -20,7 +20,12 @@ import {
   GIT_DIFF_OPERATION,
   GIT_STATUS_OPERATION,
 } from "./git-backend.js";
-import plugin, { parseGitWorktreeList } from "./server-plugin.js";
+import plugin, {
+  createGitWorkspaceProvider,
+  parseGitWorktreeList,
+  scanUnitWorktrees,
+  unitWorkspacesFor,
+} from "./server-plugin.js";
 
 const tempRoots: string[] = [];
 const gitLocalEnvironmentKeys = [
@@ -364,6 +369,93 @@ describe("parseGitWorktreeList", () => {
   });
 });
 
+describe("unit worktree workspaces", () => {
+  it("appends unit checkouts whose clone origin matches a project checkout path", async () => {
+    const repository = await createRepository("units repo");
+    const unitsRoot = await temporaryDirectory("units root");
+    const unitWorktrees = join(unitsRoot, "pi-20261107-night", "worktrees");
+    await mkdir(unitWorktrees, { recursive: true });
+    runGit(repository.parent, ["clone", repository.path, join(unitWorktrees, "primary")]);
+
+    const provider = unitProviderFor(unitsRoot);
+    const workspaces = await provider.list(project(repository.path), new AbortController().signal);
+
+    expect(workspaces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: join(unitWorktrees, "primary"),
+        label: "pi-20261107-night/primary",
+        isMain: false,
+        publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "main" },
+      }),
+    ]));
+    expect(workspaces.find(({ label }) => label === "pi-20261107-night/primary")?.data)
+      .toEqual({ worktreePath: join(unitWorktrees, "primary"), branch: "main" });
+    expect(workspaces.filter(({ isMain }) => isMain)).toHaveLength(1);
+  });
+
+  it("never offers unit workspaces for removal through the git worktree planner", async () => {
+    const repository = await createRepository("removal repo");
+    const unitsRoot = await temporaryDirectory("units root removal");
+    const unitWorktrees = join(unitsRoot, "u1", "worktrees");
+    await mkdir(unitWorktrees, { recursive: true });
+    runGit(repository.parent, ["clone", repository.path, join(unitWorktrees, "primary")]);
+
+    const provider = unitProviderFor(unitsRoot);
+    const workspaces = await provider.list(project(repository.path), new AbortController().signal);
+    const unitWorkspace = workspaces.find(({ label }) => label === "u1/primary");
+
+    expect(unitWorkspace).toBeDefined();
+    expect(unitWorkspace).not.toHaveProperty("removal");
+  });
+
+  it("lists unit workspaces even when the project has no registered worktrees", async () => {
+    const repository = await createRepository("worktreeless repo");
+    const unitsRoot = await temporaryDirectory("units root worktreeless");
+    const unitWorktrees = join(unitsRoot, "u2", "worktrees");
+    await mkdir(unitWorktrees, { recursive: true });
+    runGit(repository.parent, ["clone", repository.path, join(unitWorktrees, "primary")]);
+    runGit(repository.path, ["worktree", "prune"]);
+
+    const provider = unitProviderFor(unitsRoot);
+    const workspaces = await provider.list(project(repository.path), new AbortController().signal);
+
+    expect(workspaces.map(({ label }) => label)).toContain("u2/primary");
+  });
+
+  it("skips entries outside the units root, without .git, or with unusable git metadata", async () => {
+    const entries = await scanUnitWorktrees({ runGit: () => Promise.reject(new Error("git unavailable")) }, "/missing/units");
+    expect(entries).toEqual([]);
+  });
+
+  it("filters unit entries by origin path, dedupes paths, and omits empty branch fields", () => {
+    const entries = [
+      { path: "/units/a/worktrees/primary", label: "a/primary", origin: "/repos/main", branch: "main" },
+      { path: "/units/a/worktrees/primary", label: "a/primary duplicate", origin: "/repos/main", branch: "main" },
+      { path: "/units/b/worktrees/detached", label: "b/detached", origin: "/repos/main", branch: "" },
+      { path: "/units/c/worktrees/other", label: "c/other", origin: "/repos/unrelated", branch: "dev" },
+    ];
+
+    expect(unitWorkspacesFor(entries, ["/repos/main"])).toEqual([
+      {
+        key: "/units/a/worktrees/primary",
+        path: "/units/a/worktrees/primary",
+        label: "a/primary",
+        isMain: false,
+        data: { worktreePath: "/units/a/worktrees/primary", branch: "main" },
+        publicMetadata: { isGitRepo: true, isGitWorktree: true, branch: "main" },
+      },
+      {
+        key: "/units/b/worktrees/detached",
+        path: "/units/b/worktrees/detached",
+        label: "b/detached",
+        isMain: false,
+        data: { worktreePath: "/units/b/worktrees/detached" },
+        publicMetadata: { isGitRepo: true, isGitWorktree: true },
+      },
+    ]);
+  });
+});
+
 async function activationFor(execFile: ServerPluginActivationContext["execFile"]): Promise<ServerPluginActivation> {
   const activation = await plugin.activate({
     apiVersion: 3,
@@ -394,6 +486,23 @@ function requiredProvider(activation: ServerPluginActivation): WorkspaceProvider
   const provider = activation.workspaceProvider;
   if (provider === undefined) throw new Error("Bundled Git did not activate its workspace provider");
   return provider;
+}
+
+function unitProviderFor(unitsRoot: string): WorkspaceProvider {
+  return createGitWorkspaceProvider(
+    {
+      apiVersion: 3,
+      pluginId: "git",
+      packageRoot: resolve("pi-web-plugins/git"),
+      dataDirectory: "/data/plugin-data/git",
+      logger: { debug() { /* no-op */ }, info() { /* no-op */ }, warn() { /* no-op */ }, error() { /* no-op */ } },
+      settings: {},
+      execFile: createServerPluginExecFile({ env: cleanGitEnvironment() }),
+      signal: new AbortController().signal,
+      lifetimeSignal: new AbortController().signal,
+    },
+    { unitsRoot },
+  );
 }
 
 function requiredPeer(activation: ServerPluginActivation): ServerPluginPeer {
