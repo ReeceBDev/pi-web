@@ -225,6 +225,33 @@ describe("FileWebPushPersistence", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
+  it("loads the 2026-10-10 incident state.json without failing startup and keeps the VAPID identity", async () => {
+    // Exact on-disk shape that crash-looped sessiond on 2026-10-10: current Chrome
+    // issues endpoints on jmt<N>.google.com with colon-bearing FCM tokens, which the
+    // then-deployed validator rejected fatally. load() must resolve regardless of
+    // whether unknown-host records are dropped (main) or accepted (post-merge).
+    const directory = join(await mkdtemp(join(tmpdir(), "web-push-test-")), "web-push");
+    const persistence = new FileWebPushPersistence(directory);
+    const pair = createECDH("prime256v1");
+    pair.generateKeys();
+    const vapid = { publicKey: pair.getPublicKey().toString("base64url"), privateKey: pair.getPrivateKey().toString("base64url") };
+    const fixture = subscriptionFixture();
+    await persistence.save({
+      version: 1,
+      vapid,
+      subscriptions: [
+        { subscription: { endpoint: "https://jmt17.google.com/fcm/send/didGV7uxrg8:APA91bGUSQsiasmg6-0Cn3sYMxZ", keys: fixture.keys }, generation: "55674529-7a36-454f-8c4e-4000efced4ce" },
+        { subscription: { endpoint: fixture.endpoint, keys: fixture.keys }, generation: "55674529-7a36-454f-8c4e-4000efced4cf" },
+      ],
+    });
+    const store = new WebPushStore(persistence);
+    await expect(store.load()).resolves.toBeUndefined();
+    expect(store.snapshot().vapid).toEqual(vapid);
+    const endpoints = store.snapshot().subscriptions.map((entry) => entry.subscription.endpoint);
+    expect(endpoints).toContain(fixture.endpoint);
+    await rm(directory, { recursive: true, force: true });
+  });
+
   it("surfaces corrupt files as load errors, never as empty state", async () => {
     const directory = join(await mkdtemp(join(tmpdir(), "web-push-test-")), "web-push");
     const persistence = new FileWebPushPersistence(directory);
