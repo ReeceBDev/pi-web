@@ -3,7 +3,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project, WorkspaceListing } from "../types.js";
 import { WebPushStore } from "./webPushStore.js";
-import { registerWebPushProxyRoutes, registerWebPushRoutes } from "./webPushRoutes.js";
+import { registerFcmProxyRoutes, registerWebPushProxyRoutes, registerWebPushRoutes } from "./webPushRoutes.js";
 import { WebPushService, type PushSender } from "./webPushService.js";
 
 const BASE_URL = "https://pi.example.test/pi-web/";
@@ -154,6 +154,46 @@ describe("web push gateway proxy boundary", () => {
     expect(response.statusCode).toBe(502);
     expect(response.json()).toEqual({ error: "Native push daemon unavailable" });
     await failing.close();
+  });
+});
+
+describe("FCM proxy routes (launcher box-push contract)", () => {
+  let app: FastifyInstance;
+  const calls: { method: string; path: string }[] = [];
+  const daemon = { request: (method: string, path: string) => { calls.push({ method, path }); return Promise.resolve({ statusCode: 200, headers: {} as Record<string, string>, body: JSON.stringify({ ok: true }) }); } };
+
+  beforeEach(() => {
+    app = Fastify({ logger: false });
+    registerFcmProxyRoutes(app, daemon, () => Promise.resolve(BASE_URL));
+    calls.length = 0;
+  });
+
+  afterEach(async () => { await app.close(); });
+
+  it("forwards the injected same-origin subscribe fetch to the daemon", async () => {
+    const response = await app.inject({
+      method: "POST", url: "/plugins-api/box-push/subscribe",
+      headers: { host: "pi.example.test", origin: "https://pi.example.test", "content-type": "application/json" },
+      payload: { token: "fcm-device-token-abcdefghijklmnop" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(calls[0]).toMatchObject({ method: "POST", path: "/fcm/subscribe" });
+  });
+
+  it("rejects cross-origin subscribe and allows the Dart diag caller without an Origin header", async () => {
+    const cross = await app.inject({
+      method: "POST", url: "/plugins-api/box-push/subscribe",
+      headers: { host: "pi.example.test", origin: "https://evil.test", "content-type": "application/json" },
+      payload: { token: "fcm-device-token-abcdefghijklmnop" },
+    });
+    expect(cross.statusCode).toBe(403);
+    const diag = await app.inject({
+      method: "POST", url: "/plugins-api/box-push/diag",
+      headers: { host: "pi.example.test", "content-type": "application/json" },
+      payload: { event: "controller_start", fields: {} },
+    });
+    expect(diag.statusCode).toBe(200);
+    expect(calls).toEqual([expect.objectContaining({ method: "POST", path: "/fcm/diag" })]);
   });
 });
 

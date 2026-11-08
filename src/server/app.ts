@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyServerOptions } from "fastify";
 import fastifyCompress from "@fastify/compress";
 import fastifyStatic from "@fastify/static";
-import { registerWebPushProxyRoutes } from "./webPush/webPushRoutes.js";
+import { registerFcmProxyRoutes, registerWebPushProxyRoutes } from "./webPush/webPushRoutes.js";
 import fastifyWebsocket from "@fastify/websocket";
 import { ProjectStore } from "./storage/projectStore.js";
 import { ProjectService } from "./projects/projectService.js";
@@ -283,6 +283,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService, sessionDaemon });
 
   registerWebPushProxyRoutes(app, sessionDaemon, async () => (await readConfig()).webPush?.publicBaseUrl);
+  registerFcmProxyRoutes(app, sessionDaemon, async () => (await readConfig()).webPush?.publicBaseUrl);
   registerSessionProxyRoutes(app, sessionDaemon);
   registerSessionProxyRoutes(app, sessionDaemon, "/api/machines/local");
   registerPairedPluginBackendProxyRoutes(app, sessionDaemon);

@@ -3,7 +3,9 @@ import { mkdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { FileWebPushPersistence, WebPushStore } from "./webPush/webPushStore.js";
 import { WebPushService } from "./webPush/webPushService.js";
-import { registerWebPushRoutes } from "./webPush/webPushRoutes.js";
+import { registerFcmRoutes, registerWebPushRoutes } from "./webPush/webPushRoutes.js";
+import { FileFcmPersistence, FcmPushStore } from "./webPush/fcmPushStore.js";
+import { FcmPushService } from "./webPush/fcmPushService.js";
 import { cwdPathsEqual } from "./workingDirectory.js";
 import Fastify from "fastify";
 import fastifyWebsocket from "@fastify/websocket";
@@ -218,6 +220,8 @@ async function createSessionDaemonRuntime() {
   let sessionsForFailedConstruction: PiSessionService | undefined;
   let projectLifecycleForFailedConstruction: ProjectLifecycleService | undefined;
   let nativePush: WebPushService | undefined;
+  let fcmPush: FcmPushService | undefined;
+  let fcmStore: FcmPushStore | undefined;
   try {
     const notificationStore = new SessionNotificationStore();
     const unreadStore = new SessionUnreadStore({
@@ -250,6 +254,24 @@ async function createSessionDaemonRuntime() {
         report: (reason) => { app.log.warn({ component: "native-push", reason }, "native push delivery diagnostic"); },
       });
       nativePush.attach(eventHub, unreadStore.catalogSnapshot());
+    }
+    const fcmStoreCandidate = config.webPush === undefined ? undefined : new FcmPushStore(new FileFcmPersistence(join(piWebDataDir(daemonEnvironment), "fcm-push")));
+    if (fcmStoreCandidate !== undefined) {
+      try { await fcmStoreCandidate.load(); } catch { throw new Error("FCM push state could not be loaded; inspect private state before restarting"); }
+    }
+    if (fcmStoreCandidate !== undefined && config.webPush !== undefined) {
+      fcmStore = fcmStoreCandidate;
+      fcmPush = new FcmPushService({
+        store: fcmStore,
+        baseUrl: config.webPush.publicBaseUrl,
+        isCurrent: (event) => {
+          const current = unreadStore.catalogSnapshot();
+          return current.catalogId === event.catalogId && current.sessions.some((summary) => summary.sessionId === event.sessionId && summary.cwd === event.cwd && summary.completionOrder === event.unread?.completionOrder);
+        },
+        mayNotify: (summary) => sessions.mayNotifyCompletion(summary.sessionId, summary.cwd),
+        report: (reason) => { app.log.warn({ component: "fcm-push", reason }, "FCM push delivery diagnostic"); },
+      });
+      fcmPush.attach(eventHub, unreadStore.catalogSnapshot());
     }
     // Activity and status are mutually dependent by design: the record notifies
     // the projection, the projection reads the record. The notification runs
@@ -397,6 +419,7 @@ async function createSessionDaemonRuntime() {
       if (disposed) return;
       disposed = true;
       nativePush?.dispose();
+      fcmPush?.dispose();
       await runSessionDaemonShutdown({
         logger: app.log,
         dependencies: {
@@ -422,9 +445,10 @@ async function createSessionDaemonRuntime() {
       await stateOwnership.release();
     };
     projectLifecycle.scheduleCleanup(); // One delayed pass for existing persisted unread, if any.
-    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, pushStore, nativePush, shutdown };
+    return { eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, unreadStore, activeAgentProfile, runtimeComponent, catalogRefresher, serverPlugins, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, pushStore, nativePush, fcmStore, fcmPush, shutdown };
   } catch (error) {
     nativePush?.dispose();
+    fcmPush?.dispose();
     await projectLifecycleForFailedConstruction?.closeAll();
     try {
       await serverPlugins.stop();
@@ -440,8 +464,9 @@ async function createSessionDaemonRuntime() {
   }
 }
 
-function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, pushStore, nativePush }: SessionDaemonRuntime): void {
+function registerSessionDaemonRoutes({ eventHub, machineStatus, statusAttribution, projectLifecycle, auth, sessions, serverNotices, runtimeComponent, projects, workspaceProviders, pluginBackends, workspaceProviderRuntime, workspaceRemovals, pushStore, nativePush, fcmStore, fcmPush }: SessionDaemonRuntime): void {
   if (pushStore !== undefined && nativePush !== undefined) registerWebPushRoutes(app, pushStore, nativePush);
+  if (fcmStore !== undefined && fcmPush !== undefined) registerFcmRoutes(app, fcmStore, fcmPush);
   registerProjectMutationRoutes(app, projectLifecycle);
   registerMachineStatusRoutes(app, machineStatus);
   registerServerNoticeRoutes(app, serverNotices);
