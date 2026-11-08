@@ -427,6 +427,35 @@ describe("unit worktree workspaces", () => {
     expect(entries).toEqual([]);
   });
 
+  it("reads the origin once per unit and every worktree branch in parallel", async () => {
+    const unitsRoot = await temporaryDirectory("units root origin dedupe");
+    const worktrees = async (unit: string, names: string[]) => {
+      const root = join(unitsRoot, unit, "worktrees");
+      for (const name of names) await mkdir(join(root, name), { recursive: true });
+      return names.map((name) => join(root, name));
+    };
+    const primary = await worktrees("u1", ["primary", "second"]);
+    const lone = await worktrees("u2", ["primary"]);
+    for (const path of [...primary, ...lone]) await mkdir(join(path, ".git"), { recursive: true });
+    const originCalls: string[] = [];
+    const branchCalls: string[] = [];
+    const entries = await scanUnitWorktrees({
+      runGit: async (cwd, args) => {
+        if (args[0] === "remote") {
+          originCalls.push(cwd);
+          return { stdout: "/repos/main\n" };
+        }
+        branchCalls.push(cwd);
+        return { stdout: "main\n" };
+      },
+    }, unitsRoot);
+
+    expect(entries.map(({ label }) => label)).toEqual(["u1/primary", "u1/second", "u2/primary"]);
+    expect(entries.every(({ origin }) => origin === "/repos/main")).toBe(true);
+    expect(originCalls).toEqual([primary[0], lone[0]]);
+    expect(branchCalls).toEqual([...primary, ...lone]);
+  });
+
   it("filters unit entries by origin path, dedupes paths, and omits empty branch fields", () => {
     const entries = [
       { path: "/units/a/worktrees/primary", label: "a/primary", origin: "/repos/main", branch: "main" },

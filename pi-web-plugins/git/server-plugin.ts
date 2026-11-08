@@ -15,6 +15,7 @@ import type {
 import { requestGitBackend } from "./git-backend.js";
 
 const UNIT_SCAN_TTL_MS = 3_000;
+const UNIT_SCAN_CONCURRENCY = 12;
 
 const GIT_LOCAL_ENV_VARS = Object.freeze([
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -200,7 +201,7 @@ export async function scanUnitWorktrees(deps: UnitScanDeps, unitsRoot: string): 
   } catch {
     return [];
   }
-  const found: UnitWorktreeEntry[] = [];
+  const groups: Array<{ unit: string; paths: string[] }> = [];
   for (const unit of units) {
     const worktreesRoot = join(unitsRoot, unit, "worktrees");
     let children: string[];
@@ -209,19 +210,44 @@ export async function scanUnitWorktrees(deps: UnitScanDeps, unitsRoot: string): 
     } catch {
       continue;
     }
-    for (const child of children) {
-      const path = join(worktreesRoot, child);
-      if (!existsSync(join(path, ".git"))) continue;
-      try {
-        const origin = (await deps.runGit(path, ["remote", "get-url", "origin"])).stdout.trim();
-        const branch = (await deps.runGit(path, ["branch", "--show-current"])).stdout.trim();
-        found.push({ path, label: `${unit}/${child}`, origin, branch });
-      } catch {
-        continue;
-      }
-    }
+    const paths = children.map((child) => join(worktreesRoot, child)).filter((path) => existsSync(join(path, ".git")));
+    if (paths.length > 0) groups.push({ unit, paths });
   }
-  return found;
+  // Every worktree of a unit shares the unit clone's origin, so the origin is
+  // read once per unit and branches are read in parallel. The previous sweep
+  // ran two serial git spawns per worktree (~126 processes for ~63 units) and
+  // gated the workspace catalog listing for seconds.
+  const scanned = await boundedMap(groups, UNIT_SCAN_CONCURRENCY, async ({ unit, paths }) => {
+    let origin = "";
+    try {
+      origin = (await deps.runGit(paths[0], ["remote", "get-url", "origin"])).stdout.trim();
+    } catch {
+      return [];
+    }
+    return boundedMap(paths, UNIT_SCAN_CONCURRENCY, async (path) => {
+      try {
+        const branch = (await deps.runGit(path, ["branch", "--show-current"])).stdout.trim();
+        return { path, label: `${unit}/${basename(path)}`, origin, branch };
+      } catch {
+        return null;
+      }
+    });
+  });
+  return scanned.flat().filter((entry): entry is UnitWorktreeEntry => entry !== null);
+}
+
+/** Runs `fn` over `items` with at most `limit` promises in flight, preserving order. */
+async function boundedMap<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /** Unit checkouts whose origin path belongs to this project's known checkout
