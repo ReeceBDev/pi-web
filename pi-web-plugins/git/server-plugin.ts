@@ -218,9 +218,11 @@ export async function scanUnitWorktrees(deps: UnitScanDeps, unitsRoot: string): 
   // ran two serial git spawns per worktree (~126 processes for ~63 units) and
   // gated the workspace catalog listing for seconds.
   const scanned = await boundedMap(groups, UNIT_SCAN_CONCURRENCY, async ({ unit, paths }) => {
+    const firstPath = paths[0];
+    if (firstPath === undefined) return [];
     let origin = "";
     try {
-      origin = (await deps.runGit(paths[0], ["remote", "get-url", "origin"])).stdout.trim();
+      origin = (await deps.runGit(firstPath, ["remote", "get-url", "origin"])).stdout.trim();
     } catch {
       return [];
     }
