@@ -430,8 +430,7 @@ export class ChatView extends LitElement {
       ${this.renderNotificationLiveRegions()}
       <div class="chat-wrap">
         ${this.renderConversationRail()}
-        <div class="chat" data-image-scroll-root @image-will-layout=${this.onImageWillLayout} @image-layout=${this.onImageLayout} @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }} @scroll=${() => { this.onScroll(); }} @wheel=${{ handleEvent: (event: WheelEvent) => { this.onWheel(event); }, passive: true }} @touchstart=${{ handleEvent: (event: TouchEvent) => { this.onTouchStart(event); }, passive: true }} @touchmove=${{ handleEvent: (event: TouchEvent) => { this.onTouchMove(event); }, passive: true }}>
-          <!-- rbowen (scrollfix1): wheel/touchstart/touchmove registered passive. None of the handlers ever preventDefault, but as blocking listeners they force Android WebView/Chrome to route every touch through the main thread, killing fling momentum (chat scroll stutter). Handlers only read clientY / set pinnedToBottom. -->
+        <div class="chat" data-image-scroll-root @image-will-layout=${this.onImageWillLayout} @image-layout=${this.onImageLayout} @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }} @scroll=${() => { this.onScroll(); }} @wheel=${(event: WheelEvent) => { this.onWheel(event); }} @touchstart=${(event: TouchEvent) => { this.onTouchStart(event); }} @touchmove=${(event: TouchEvent) => { this.onTouchMove(event); }}>
           ${this.renderHistoryBoundary()}
           ${keyed(transcriptIdentity, repeat(
             groups,
