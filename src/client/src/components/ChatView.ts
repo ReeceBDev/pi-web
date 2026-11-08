@@ -232,6 +232,7 @@ export class ChatView extends LitElement {
   private lastScrollTop = 0;
   private lastClientHeight = 0;
   private touchStartY: number | undefined;
+  private userScrollUntil = 0;
   private pendingScrollRestoreSessionId: string | undefined;
   private pendingScrollRestorePosition: ChatAnchorScrollPosition | undefined;
   private restoreScrollFrame: number | undefined;
@@ -430,7 +431,7 @@ export class ChatView extends LitElement {
       ${this.renderNotificationLiveRegions()}
       <div class="chat-wrap">
         ${this.renderConversationRail()}
-        <div class="chat" data-image-scroll-root @image-will-layout=${this.onImageWillLayout} @image-layout=${this.onImageLayout} @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }} @scroll=${() => { this.onScroll(); }} @wheel=${(event: WheelEvent) => { this.onWheel(event); }} @touchstart=${(event: TouchEvent) => { this.onTouchStart(event); }} @touchmove=${(event: TouchEvent) => { this.onTouchMove(event); }}>
+        <div class="chat" data-image-scroll-root @image-will-layout=${this.onImageWillLayout} @image-layout=${this.onImageLayout} @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }} @scroll=${() => { this.onScroll(); }} @wheel=${(event: WheelEvent) => { this.onWheel(event); }} @touchstart=${(event: TouchEvent) => { this.onTouchStart(event); }} @touchmove=${(event: TouchEvent) => { this.onTouchMove(event); }} @touchend=${() => { this.onTouchEnd(); }} @touchcancel=${() => { this.onTouchEnd(); }}>
           ${this.renderHistoryBoundary()}
           ${keyed(transcriptIdentity, repeat(
             groups,
@@ -984,6 +985,7 @@ export class ChatView extends LitElement {
   }
 
   private onScroll() {
+    if (this.userScrollActive()) this.userScrollUntil = Date.now() + 300;
     this.imageLayoutScroll.reset();
     this.requestLoadMoreIfNeeded();
     this.updatePinnedToBottomFromScroll();
@@ -996,12 +998,24 @@ export class ChatView extends LitElement {
   }
 
   private onTouchStart(event: TouchEvent) {
+    this.userScrollUntil = Date.now() + 800;
     this.touchStartY = event.touches[0]?.clientY;
   }
 
   private onTouchMove(event: TouchEvent) {
+    this.userScrollUntil = Date.now() + 400;
     const y = event.touches[0]?.clientY;
     if (this.touchStartY !== undefined && y !== undefined && y > this.touchStartY && this.canScrollUp()) this.pinnedToBottom = false;
+  }
+
+  private onTouchEnd() {
+    this.userScrollUntil = Date.now() + 400;
+    this.touchStartY = undefined;
+  }
+
+  /** True while a touch drag or its fling inertia is still moving the chat. */
+  private userScrollActive(): boolean {
+    return Date.now() < this.userScrollUntil;
   }
 
   private updatePinnedToBottomFromScroll() {
@@ -1012,10 +1026,12 @@ export class ChatView extends LitElement {
     const scrollingUp = chat.scrollTop < this.lastScrollTop;
     if (heightChanged && wasPinnedToBottom) {
       this.lastClientHeight = chat.clientHeight;
-      this.scrollToBottom();
+      if (!this.userScrollActive()) this.scrollToBottom();
       return;
     }
-    if (this.isAtBottom()) this.pinnedToBottom = true;
+    if (this.userScrollActive()) {
+      if (scrollingUp || !this.isNearBottom()) this.pinnedToBottom = false;
+    } else if (this.isAtBottom()) this.pinnedToBottom = true;
     else if (scrollingUp) this.pinnedToBottom = false;
     else this.pinnedToBottom = this.isNearBottom();
     this.lastScrollTop = chat.scrollTop;
@@ -1078,6 +1094,7 @@ export class ChatView extends LitElement {
     if (this.scrollToBottomFrame !== undefined) return;
     this.scrollToBottomFrame = requestAnimationFrame(() => {
       this.scrollToBottomFrame = undefined;
+      if (this.userScrollActive()) return;
       const chat = this.chat;
       if (!chat) return;
       this.withSuppressedScrollSave(() => {
