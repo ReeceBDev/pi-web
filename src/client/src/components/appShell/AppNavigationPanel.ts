@@ -61,6 +61,7 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onSelectWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onDeleteWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onStartSession?: () => void | Promise<void>;
+  @property({ attribute: false }) onStartPlain?: () => void | Promise<void>;
   @property({ attribute: false }) unitMenuCwd?: string | undefined;
   @property({ attribute: false }) onSessionMenuOpen?: (session: SessionInfo) => void;
   @property({ attribute: false }) onStartSessionAt?: (path: string) => void;
@@ -119,6 +120,7 @@ export class AppNavigationPanel extends LitElement {
     toggleSessions: () => { this.onToggleSessions?.(); },
     archivedCollapsed: () => this.onArchivedCollapsed?.(),
     startSession: () => this.onStartSession?.(),
+    startSessionPlain: () => this.onStartPlain?.(),
     sessionMenuOpen: (session: SessionInfo) => this.onSessionMenuOpen?.(session),
     startSessionAt: (path: string) => this.onStartSessionAt?.(path),
     addWorktree: (session: SessionInfo) => this.onAddWorktree?.(session),
@@ -233,6 +235,7 @@ export class AppNavigationPanel extends LitElement {
         .onToggleCollapsed=${this.childCallbacks.toggleSessions}
         .onArchivedCollapsed=${this.childCallbacks.archivedCollapsed}
         .onStart=${this.childCallbacks.startSession}
+        .onStartPlain=${this.childCallbacks.startSessionPlain}
         .unitMenuCwd=${this.unitMenuCwd}
         .onSessionMenuOpen=${this.childCallbacks.sessionMenuOpen}
         .onStartAt=${this.childCallbacks.startSessionAt}
