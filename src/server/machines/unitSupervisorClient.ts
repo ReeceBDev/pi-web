@@ -45,9 +45,13 @@ export class UnitSupervisorClient implements UnitSupervisorDelegate {
     return this.request("POST", "/worktree", JSON.stringify(body ?? {}));
   }
 
-  /** Resolve the unit (if any) that owns a working directory. */
+  /** Resolve the unit (if any) that owns a working directory. The supervisor
+   * answers 404 ("outside any unit") for a cwd it does not own — a negative
+   * answer, not a failure — so it is normalised to 200 with an empty body;
+   * callers treat a missing `unit` field as "not a unit". */
   async unitByCwd(cwd: string): Promise<SupervisorResponse> {
-    return this.request("GET", `/unit?${new URLSearchParams({ cwd }).toString()}`);
+    const response = await this.request("GET", `/unit?${new URLSearchParams({ cwd }).toString()}`);
+    return response.status === 404 ? { status: 200, body: {} } : response;
   }
 
   /** Long-poll a unit's generation status; query fields pass through unchanged. */

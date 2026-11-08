@@ -50,4 +50,13 @@ describe("UnitSupervisorClient", () => {
 
     expect(response).toEqual({ status: 409, body: undefined });
   });
+
+  it("normalises the supervisor's 404 not-a-unit answer to 200 with an empty body", async () => {
+    const { fetch } = fakeFetch(404, { error: "outside any unit: /home/rbowen/pi" });
+    const client = new UnitSupervisorClient({ baseUrl: "http://127.0.0.1:8765", fetchImpl: fetch });
+
+    const response = await client.unitByCwd("/home/rbowen/pi");
+
+    expect(response).toEqual({ status: 200, body: {} });
+  });
 });
