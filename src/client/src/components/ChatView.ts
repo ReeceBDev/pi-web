@@ -1251,8 +1251,14 @@ export class ChatView extends LitElement {
     const settle = () => {
       const chat = this.chat;
       if (!chat || token !== this.prependRestoreToken) return;
-      restorePrependScrollAnchor(chat, anchor, anchor.markerId === undefined ? undefined : this.scrollMarkerAt(anchor.markerId));
-      this.lastScrollTop = chat.scrollTop;
+      // This loop writes scrollTop every frame; doing that while touch fling
+      // inertia is live cancels the momentum (scroll feels caught). Skip the
+      // write until inertia ends; remaining frames re-anchor then.
+      // ponytail: a fling longer than the 30-frame window gets no re-anchor; extend frames instead of skipping writes if drift is reported.
+      if (!this.userScrollActive()) {
+        restorePrependScrollAnchor(chat, anchor, anchor.markerId === undefined ? undefined : this.scrollMarkerAt(anchor.markerId));
+        this.lastScrollTop = chat.scrollTop;
+      }
       frames += 1;
       // Formatted markdown/code layout can settle after Lit's first render. Re-apply
       // the marker anchor briefly so late height changes above the viewport do not
