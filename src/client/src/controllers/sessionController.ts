@@ -293,7 +293,21 @@ export class SessionController {
       // reconcile routes through it, so wait (bounded) for the listing to land
       // before resolving — otherwise the pending row is deselected mid-reconcile
       // and queued sends die.
-      if (isUnitWorktreePath(session.cwd)) await this.waitForWorkspaceListing?.(session.cwd, machineId);
+      if (isUnitWorktreePath(session.cwd)) {
+        // The listing wait guards selection reconcile only. Queued sends are
+        // delivered here, before the wait, to the already-created backend
+        // session: the first message must reach the server immediately (the
+        // plan's New Work flow) instead of riding out the catalog wait, whose
+        // provider-list tail was measured at seconds (p90 3.1s, max 9.6s).
+        // resolvePendingSessionStart later finds the queue empty and flushes
+        // nothing.
+        const started = this.pendingSessionStarts.get(pending.tempId);
+        const earlySends = started?.queuedSends.splice(0) ?? [];
+        if (earlySends.length > 0) {
+          await this.flushQueuedPendingSends(session, machineId, earlySends, this.captureSessionErrorOwner(session, pending.originWorkspace));
+        }
+        await this.waitForWorkspaceListing?.(session.cwd, machineId);
+      }
       await this.resolvePendingSessionStart(pending.tempId, session);
     } catch (error) {
       this.failPendingSessionStart(pending.tempId, error);

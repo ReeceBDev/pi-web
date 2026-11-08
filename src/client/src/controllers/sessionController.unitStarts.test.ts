@@ -80,6 +80,46 @@ describe("SessionController unit starts", () => {
     expect(state.selectedSession?.id).toBe("started-session");
   });
 
+  it("delivers prompts queued during a unit start before the workspace listing resolves", async () => {
+    const unitPath = "/home/rbowen/units/pi-2/worktrees/primary";
+    const started: SessionInfo = { ...oldSessionShape(), id: "started-session", cwd: unitPath, path: "/tmp/started-2b.jsonl" };
+    const startRequest = deferred<SessionInfo>();
+    const events: string[] = [];
+    let releaseListing: (() => void) | undefined;
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const controller = controllerWith(() => state, (patch) => { state = { ...state, ...patch }; }, {
+      api: {
+        supervisorUnit: () => Promise.resolve({ unit: "/units/pi-2" }),
+        startSession: () => startRequest.promise,
+        prompt: () => {
+          events.push("prompt");
+          return Promise.resolve({ accepted: true });
+        },
+      },
+      waitForWorkspaceListing: () => new Promise<boolean>((resolve) => { releaseListing = () => { resolve(true); }; }),
+    });
+
+    const start = controller.startSession({ updateUrl: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The composer targets the pending temp row while the start is in flight.
+    await controller.send("Hey");
+    startRequest.resolve(started);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The plan's New Work flow: the first message reaches the server (the
+    // prompt API call fires) while the listing wait is still parked.
+    expect(events).toEqual(["prompt"]);
+    expect(state.selectedSession?.id).not.toBe("started-session");
+
+    releaseListing?.();
+    await start;
+    expect(state.selectedSession?.id).toBe("started-session");
+    // resolvePendingSessionStart must not deliver the send a second time.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events).toEqual(["prompt"]);
+  });
+
   it("falls back to the plain local session when the supervisor is unreachable", async () => {
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
     const started: SessionInfo = { ...oldSessionShape(), id: "started-session", cwd: "/repo", path: "/tmp/started-3.jsonl" };
