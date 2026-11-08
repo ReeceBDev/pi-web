@@ -8,7 +8,6 @@ function controllerWith(
   setState: (patch: Partial<AppState>) => void,
   overrides: {
     api?: Partial<typeof defaultApi>;
-    waitForWorkspaceListing?: (cwd: string, machineId: string) => Promise<boolean>;
   } = {},
 ): SessionController {
   return new SessionController(
@@ -19,7 +18,6 @@ function controllerWith(
     {
       api: { ...defaultApi, ...overrides.api },
       socket: new FakeSocket(),
-      waitForWorkspaceListing: overrides.waitForWorkspaceListing ?? (() => Promise.resolve(false)),
     },
   );
 }
@@ -58,45 +56,37 @@ describe("SessionController unit starts", () => {
     expect(state.selectedSession?.id).toBe("started-session");
   });
 
-  it("waits for the workspace listing before resolving a unit session", async () => {
+  it("resolves a unit session immediately without any workspace-listing dependency", async () => {
     const unitPath = "/home/rbowen/units/pi-2/worktrees/primary";
     const started: SessionInfo = { ...oldSessionShape(), id: "started-session", cwd: unitPath, path: "/tmp/started-2.jsonl" };
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
-    const waits: string[] = [];
     const controller = controllerWith(() => state, (patch) => { state = { ...state, ...patch }; }, {
       api: {
         supervisorUnit: () => Promise.resolve({ unit: "/units/pi-2" }),
         startSession: () => Promise.resolve(started),
       },
-      waitForWorkspaceListing: (cwd) => {
-        waits.push(cwd);
-        return Promise.resolve(true);
-      },
     });
 
     await controller.startSession({ updateUrl: false });
 
-    expect(waits).toEqual([unitPath]);
     expect(state.selectedSession?.id).toBe("started-session");
   });
 
-  it("delivers prompts queued during a unit start before the workspace listing resolves", async () => {
+  it("delivers a prompt sent during a unit start to the new session without waiting on anything", async () => {
     const unitPath = "/home/rbowen/units/pi-2/worktrees/primary";
     const started: SessionInfo = { ...oldSessionShape(), id: "started-session", cwd: unitPath, path: "/tmp/started-2b.jsonl" };
     const startRequest = deferred<SessionInfo>();
-    const events: string[] = [];
-    let releaseListing: (() => void) | undefined;
+    const prompts: string[] = [];
     let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
     const controller = controllerWith(() => state, (patch) => { state = { ...state, ...patch }; }, {
       api: {
         supervisorUnit: () => Promise.resolve({ unit: "/units/pi-2" }),
         startSession: () => startRequest.promise,
-        prompt: () => {
-          events.push("prompt");
+        prompt: (_session, text) => {
+          prompts.push(text);
           return Promise.resolve({ accepted: true });
         },
       },
-      waitForWorkspaceListing: () => new Promise<boolean>((resolve) => { releaseListing = () => { resolve(true); }; }),
     });
 
     const start = controller.startSession({ updateUrl: false });
@@ -104,20 +94,11 @@ describe("SessionController unit starts", () => {
     // The composer targets the pending temp row while the start is in flight.
     await controller.send("Hey");
     startRequest.resolve(started);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    // The plan's New Work flow: the first message reaches the server (the
-    // prompt API call fires) while the listing wait is still parked.
-    expect(events).toEqual(["prompt"]);
-    expect(state.selectedSession?.id).not.toBe("started-session");
-
-    releaseListing?.();
     await start;
-    expect(state.selectedSession?.id).toBe("started-session");
-    // resolvePendingSessionStart must not deliver the send a second time.
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(events).toEqual(["prompt"]);
+
+    expect(prompts).toEqual(["Hey"]);
+    expect(state.selectedSession?.id).toBe("started-session");
   });
 
   it("falls back to the plain local session when the supervisor is unreachable", async () => {

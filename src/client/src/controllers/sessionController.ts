@@ -65,9 +65,6 @@ export interface SessionControllerDependencies {
   replacePromptEditorText?: (replacement: PromptEditorTextReplacement) => void | Promise<void>;
   onSelectedSessionReady?: (selection: SelectedSessionReady) => void;
   onModelScopeChanged?: (revision: number) => void;
-  /** Bounded refresh of the selected project's workspace catalog until `cwd`
-   * is listed. Unit sessions create catalog entries outside this controller. */
-  waitForWorkspaceListing?: (cwd: string, machineId: string) => Promise<boolean>;
 }
 
 function isUnitWorktreePath(path: string): boolean {
@@ -154,7 +151,6 @@ export class SessionController {
   private readonly replacePromptEditorText: SessionControllerDependencies["replacePromptEditorText"];
   private readonly onSelectedSessionReady: SessionControllerDependencies["onSelectedSessionReady"];
   private readonly onModelScopeChanged: SessionControllerDependencies["onModelScopeChanged"];
-  private readonly waitForWorkspaceListing: SessionControllerDependencies["waitForWorkspaceListing"];
   private readonly captureNavigation: SessionControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: SessionControllerDependencies["beginNavigationOperation"];
   private readonly browserErrors: BrowserErrorReporter;
@@ -198,7 +194,6 @@ export class SessionController {
     this.replacePromptEditorText = deps.replacePromptEditorText;
     this.onSelectedSessionReady = deps.onSelectedSessionReady;
     this.onModelScopeChanged = deps.onModelScopeChanged;
-    this.waitForWorkspaceListing = deps.waitForWorkspaceListing;
     this.captureNavigation = deps.captureNavigation;
     this.beginNavigationOperation = deps.beginNavigationOperation;
     this.browserErrors = new BrowserErrorReporter(getState, setState);
@@ -289,25 +284,14 @@ export class SessionController {
     pending.navigation = this.beginNavigationOperation?.(PENDING_SESSION_START_SCOPE);
     try {
       const session = await this.api.startSession(workspace.path, machineId, pending.tempId);
-      // Unit sessions create their workspace outside the catalog; the selection
-      // reconcile routes through it, so wait (bounded) for the listing to land
-      // before resolving — otherwise the pending row is deselected mid-reconcile
-      // and queued sends die.
-      if (isUnitWorktreePath(session.cwd)) {
-        // The listing wait guards selection reconcile only. Queued sends are
-        // delivered here, before the wait, to the already-created backend
-        // session: the first message must reach the server immediately (the
-        // plan's New Work flow) instead of riding out the catalog wait, whose
-        // provider-list tail was measured at seconds (p90 3.1s, max 9.6s).
-        // resolvePendingSessionStart later finds the queue empty and flushes
-        // nothing.
-        const started = this.pendingSessionStarts.get(pending.tempId);
-        const earlySends = started?.queuedSends.splice(0) ?? [];
-        if (earlySends.length > 0) {
-          await this.flushQueuedPendingSends(session, machineId, earlySends, this.captureSessionErrorOwner(session, pending.originWorkspace));
-        }
-        await this.waitForWorkspaceListing?.(session.cwd, machineId);
-      }
+      // No catalog wait here, not even for unit sessions: the backend session
+      // exists once startSession returns, sends target it by id, and the
+      // supervisor's create_done is the worktree verification. The workspace
+      // listing is sidebar data; the reconcile below navigates by session and
+      // works whether or not the new worktree is listed yet. Waiting on the
+      // listing parked the user's first prompt for seconds (measured p90 3.1s,
+      // max 9.6s on the live box — rbowen decision 2026-11-08: proceed
+      // immediately, sidebar catches up whenever).
       await this.resolvePendingSessionStart(pending.tempId, session);
     } catch (error) {
       this.failPendingSessionStart(pending.tempId, error);

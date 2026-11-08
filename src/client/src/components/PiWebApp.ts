@@ -181,17 +181,6 @@ export class PiWebApp extends LitElement {
       navigateToSession: (session, options) => this.navigateToSessionFromController(session, options),
       captureNavigation: () => navigationSelectionFromState(this.state),
       beginNavigationOperation: (scope) => this.beginNavigationOperation(scope),
-      waitForWorkspaceListing: async (cwd, machineId) => {
-        const projectId = this.state.selectedProject?.id;
-        if (projectId === undefined) return false;
-        for (let attempt = 0; attempt < 10; attempt++) {
-          if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2_000));
-          await this.workspaces.refreshSelectedProjectTopology();
-          if (this.state.workspacesByProjectId[projectId]?.some((workspace) => workspace.path === cwd) === true) return true;
-          if (machineId !== selectedMachineId(this.state)) return false;
-        }
-        return false;
-      },
       onSelectedSessionReady: ({ machineId, session }) => {
         void this.commitReadyChatAfterRender(machineId, session);
       },
