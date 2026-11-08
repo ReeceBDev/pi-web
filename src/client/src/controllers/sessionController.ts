@@ -264,8 +264,8 @@ export class SessionController {
     await this.clearSessionAfterNavigation(this.navigationSelection());
   }
 
-  async startSession(options?: { updateUrl?: boolean | undefined; cwd?: string | undefined }) {
-    const workspace = await this.workspaceForNewSession(options?.cwd);
+  async startSession(options?: { updateUrl?: boolean | undefined; cwd?: string | undefined; plain?: boolean }) {
+    const workspace = await this.workspaceForNewSession(options?.cwd, options?.plain === true);
     if (!workspace) return;
     const machineId = selectedMachineId(this.getState());
     const pendingUrlPublished = options?.updateUrl !== false;
@@ -303,14 +303,14 @@ export class SessionController {
    * worktree. Supervisor failures fall back to the plain local session. The
    * path swap happens before the pending start so selection, navigation, and
    * queued sends all target the unit workspace from the first published row. */
-  private async workspaceForNewSession(cwd: string | undefined): Promise<Workspace | undefined> {
+  private async workspaceForNewSession(cwd: string | undefined, plain: boolean): Promise<Workspace | undefined> {
     const state = this.getState();
     const listed = cwd === undefined
       ? state.selectedWorkspace
       : listedWorkspaceForPath(state, cwd) ?? shellWorkspaceForPath(state.selectedWorkspace, cwd);
     if (!listed) return undefined;
     const machineId = selectedMachineId(state);
-    if (machineId !== "local" || isUnitWorktreePath(listed.path)) return listed;
+    if (plain || machineId !== "local" || isUnitWorktreePath(listed.path)) return listed;
     try {
       const unit = await this.api.supervisorUnit(listed.path);
       if (unit.unit !== undefined) return listed;

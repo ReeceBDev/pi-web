@@ -1835,6 +1835,7 @@ export class PiWebApp extends LitElement {
     deleteWorkspace: (workspace: Workspace) => { void this.deleteWorkspace(workspace); },
     archivedCollapsed: () => { void this.sessions.clearSelectionAfterArchivedCollapse(); },
     startSession: () => this.startSessionFromNavigation(),
+    startSessionPlain: () => this.startSessionFromNavigation(true),
     sessionMenuOpen: (session: SessionInfo) => { void this.inspectUnitMenuSession(session); },
     startSessionAt: (path: string) => { void this.startSessionAtFromNavigation(path); },
     addWorktree: (session: SessionInfo) => { void this.sessions.addWorktree(session); },
@@ -1904,6 +1905,7 @@ export class PiWebApp extends LitElement {
         .onDeleteWorkspace=${this.navigationActions.deleteWorkspace}
         .onArchivedCollapsed=${this.navigationActions.archivedCollapsed}
         .onStartSession=${this.navigationActions.startSession}
+        .onStartPlain=${this.navigationActions.startSessionPlain}
         .unitMenuCwd=${this.unitMenuCwd}
         .onSessionMenuOpen=${this.navigationActions.sessionMenuOpen}
         .onStartSessionAt=${this.navigationActions.startSessionAt}
@@ -1961,15 +1963,15 @@ export class PiWebApp extends LitElement {
     await this.startSessionAndOpenChat(isCurrentSelection, path);
   }
 
-  private async startSessionFromNavigation(): Promise<void> {
+  private async startSessionFromNavigation(plain = false): Promise<void> {
     const seq = ++this.navigationSelectionSeq;
     const isCurrentSelection = () => seq === this.navigationSelectionSeq;
 
     this.navigationSections.advanceAfterSelection("sessions");
-    await this.startSessionAndOpenChat(isCurrentSelection);
+    await this.startSessionAndOpenChat(isCurrentSelection, undefined, plain);
   }
 
-  private async startSessionAndOpenChat(shouldComplete: () => boolean = () => true, path?: string): Promise<void> {
+  private async startSessionAndOpenChat(shouldComplete: () => boolean = () => true, path?: string, plain = false): Promise<void> {
     // Open Chat before publishing the creation token; completion owns only
     // that token and leaves subsequent surface navigation untouched.
     const navigationSeq = this.navigationSelectionSeq;
@@ -1978,7 +1980,7 @@ export class PiWebApp extends LitElement {
     const machineId = selectedMachineId(this.state);
     if (isCurrent()) await this.focusChatComposer(isCurrent);
     if (!isCurrent()) return;
-    const start = this.sessions.startSession({ cwd: path }).catch((error: unknown) => {
+    const start = this.sessions.startSession({ cwd: path, plain }).catch((error: unknown) => {
       if (workspace === undefined) return;
       this.browserErrors.report(workspaceBrowserErrorScope(machineId, workspace.projectId, workspace.id), String(error));
     });

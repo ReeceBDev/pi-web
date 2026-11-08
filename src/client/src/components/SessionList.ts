@@ -48,6 +48,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @property({ type: Boolean, reflect: true }) collapsed = false;
   @property({ attribute: false }) onSelect?: (session: SessionInfo) => void;
   @property({ attribute: false }) onStart?: () => void;
+  @property({ attribute: false }) onStartPlain?: () => void;
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onArchivedCollapsed?: () => void;
   @property({ attribute: false }) onFocusPreviousSection?: () => void | Promise<void>;
@@ -230,7 +231,8 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   private renderStartButton() {
     const title = this.startingCount > 0 ? "Start another session" : "Start a new session";
-    return html`<button class="start-session-button" title=${title} aria-label=${title} ?disabled=${!this.canStart} @click=${(event: MouseEvent) => { event.stopPropagation(); this.onStart?.(); }}>+ New Work</button>`;
+    const plainTitle = this.startingCount > 0 ? "Start another non-sandboxed session" : "Start a new non-sandboxed session (no unit, no worktree)";
+    return html`<button class="start-session-button" title=${title} aria-label=${title} ?disabled=${!this.canStart} @click=${(event: MouseEvent) => { event.stopPropagation(); this.onStart?.(); }}>+ New Work</button><button class="start-session-button" title=${plainTitle} aria-label=${plainTitle} ?disabled=${!this.canStart} @click=${(event: MouseEvent) => { event.stopPropagation(); this.onStartPlain?.(); }}>+ Non-Sandboxed</button>`;
   }
 
   private renderStartingSession() {

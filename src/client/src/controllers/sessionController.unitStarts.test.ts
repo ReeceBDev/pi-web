@@ -56,6 +56,23 @@ describe("SessionController unit starts", () => {
     expect(state.selectedSession?.id).toBe("started-session");
   });
 
+  it("plain start skips the supervisor entirely and starts in the workspace path", async () => {
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const started: SessionInfo = { ...workspace, ...oldSessionShape(), id: "started-session", cwd: "/repo", path: "/tmp/started-plain.jsonl" };
+    const controller = controllerWith(() => state, (patch) => { state = { ...state, ...patch }; }, {
+      api: {
+        supervisorUnit: () => Promise.reject(new Error("supervisor must not be called for a plain start")),
+        supervisorCreateUnit: () => Promise.reject(new Error("supervisor must not be called for a plain start")),
+        startSession: () => Promise.resolve(started),
+      },
+    });
+
+    await controller.startSession({ updateUrl: false, plain: true });
+
+    expect(state.selectedSession?.id).toBe("started-session");
+    expect(state.selectedSession?.cwd).toBe("/repo");
+  });
+
   it("resolves a unit session immediately without any workspace-listing dependency", async () => {
     const unitPath = "/home/rbowen/units/pi-2/worktrees/primary";
     const started: SessionInfo = { ...oldSessionShape(), id: "started-session", cwd: unitPath, path: "/tmp/started-2.jsonl" };
