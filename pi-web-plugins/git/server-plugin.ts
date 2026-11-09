@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import type {
@@ -15,7 +15,6 @@ import type {
 import { requestGitBackend } from "./git-backend.js";
 
 const UNIT_SCAN_TTL_MS = 3_000;
-const UNIT_SCAN_CONCURRENCY = 12;
 
 const GIT_LOCAL_ENV_VARS = Object.freeze([
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -53,7 +52,7 @@ export function createGitWorkspaceProvider(
   context: ServerPluginActivationContext,
   options: { unitsRoot?: string } = {},
 ): WorkspaceProvider {
-  const unitScan = createUnitScan(context, options.unitsRoot);
+  const unitScan = createUnitScan(options.unitsRoot);
   return Object.freeze({
     fallback: true,
     async probe(project: ProjectInput, signal: AbortSignal): Promise<ProviderClaim> {
@@ -97,7 +96,7 @@ export function createGitWorkspaceProvider(
       const selectable = worktrees
         .map(({ worktree, path }) => ({ worktree, path, isMain: path === mainWorkspacePath }))
         .filter(({ worktree, path, isMain }) => worktree.prunable !== true || isMain || path === project.path);
-      const unitWorkspaces = unitWorkspacesFor(await unitScan(signal), [mainRoot, project.path]);
+      const unitWorkspaces = unitWorkspacesFor(unitScan(), [mainRoot, project.path]);
       if (selectable.length === 0) {
         return unitWorkspaces.length > 0 ? unitWorkspaces : [singleGitWorkspace(project)];
       }
@@ -176,28 +175,27 @@ export interface UnitWorktreeEntry {
   path: string;
   /** "<unit>/<worktree-name>" — stable and human-readable. */
   label: string;
-  /** `git remote get-url origin` output; for unit clones this is the source
-   * checkout's filesystem path, which is how entries are matched to a project. */
+  /** Origin URL read from the unit clone's `.git/config`; for unit clones this
+   * is the source checkout's filesystem path, which is how entries are matched
+   * to a project. */
   origin: string;
   /** Current branch name, "" when detached. */
   branch: string;
 }
 
-export interface UnitScanDeps {
-  runGit(cwd: string, args: readonly string[]): Promise<{ stdout: string }>;
-}
-
 /** Scan ~/units/<unit>/worktrees/* for git checkouts, resolving each entry's
- * origin URL and current branch. Entries that cannot be inspected are skipped;
- * a missing or unreadable units root yields an empty result. */
-export async function scanUnitWorktrees(deps: UnitScanDeps, unitsRoot: string): Promise<UnitWorktreeEntry[]> {
+ * origin URL and current branch straight from the repo files (no git
+ * processes: the sweep must stay fast enough to never approach the provider
+ * timeout). Entries that cannot be inspected are skipped; a missing or
+ * unreadable units root yields an empty result. */
+export function scanUnitWorktrees(unitsRoot: string): UnitWorktreeEntry[] {
   let units: string[];
   try {
     units = readdirSync(unitsRoot);
   } catch {
     return [];
   }
-  const groups: { unit: string; paths: string[] }[] = [];
+  const entries: UnitWorktreeEntry[] = [];
   for (const unit of units) {
     const worktreesRoot = join(unitsRoot, unit, "worktrees");
     let children: string[];
@@ -207,47 +205,73 @@ export async function scanUnitWorktrees(deps: UnitScanDeps, unitsRoot: string): 
       continue;
     }
     const paths = children.map((child) => join(worktreesRoot, child)).filter((path) => existsSync(join(path, ".git")));
-    if (paths.length > 0) groups.push({ unit, paths });
-  }
-  // Every worktree of a unit shares the unit clone's origin, so the origin is
-  // read once per unit and branches are read in parallel. The previous sweep
-  // ran two serial git spawns per worktree (~126 processes for ~63 units) and
-  // gated the workspace catalog listing for seconds.
-  const scanned = await boundedMap(groups, UNIT_SCAN_CONCURRENCY, async ({ unit, paths }) => {
     const firstPath = paths[0];
-    if (firstPath === undefined) return [];
-    let origin = "";
-    try {
-      origin = (await deps.runGit(firstPath, ["remote", "get-url", "origin"])).stdout.trim();
-    } catch {
-      return [];
+    if (firstPath === undefined) continue;
+    // Every worktree of a unit shares the unit clone's origin, so it is read
+    // once per unit from the first worktree; a failure skips the whole unit.
+    const origin = readGitOrigin(firstPath);
+    if (origin === null) continue;
+    for (const path of paths) {
+      const branch = readGitBranch(path);
+      if (branch === null) continue;
+      entries.push({ path, label: `${unit}/${basename(path)}`, origin, branch });
     }
-    return boundedMap(paths, UNIT_SCAN_CONCURRENCY, async (path) => {
-      try {
-        const branch = (await deps.runGit(path, ["branch", "--show-current"])).stdout.trim();
-        return { path, label: `${unit}/${basename(path)}`, origin, branch };
-      } catch {
-        return null;
-      }
-    });
-  });
-  return scanned.flat().filter((entry): entry is UnitWorktreeEntry => entry !== null);
+  }
+  return entries;
 }
 
-/** Runs `fn` over `items` with at most `limit` promises in flight, preserving order. */
-async function boundedMap<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      const item = items[index];
-      if (item === undefined) break;
-      results[index] = await fn(item);
-    }
-  });
-  await Promise.all(workers);
-  return results;
+/** A worktree's git directory: `.git` itself for a full clone (a directory),
+ * or the `gitdir: <path>` target for a linked worktree (`.git` is a file). */
+function gitDirectoryFor(worktree: string): string | null {
+  const dotGit = join(worktree, ".git");
+  try {
+    if (statSync(dotGit).isDirectory()) return dotGit;
+    const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"))?.[1]?.trim();
+    return pointer === undefined ? null : resolve(worktree, pointer);
+  } catch {
+    return null;
+  }
+}
+
+/** The shared clone directory backing a git dir: itself for a full clone, or
+ * the `commondir` file's target (usually `../..`) for a linked worktree. */
+function gitCommonDirectoryFor(gitDir: string): string {
+  try {
+    const commondir = readFileSync(join(gitDir, "commondir"), "utf8").trim();
+    if (commondir !== "") return resolve(gitDir, commondir);
+  } catch {
+    // Full clone: the git directory is the common directory.
+  }
+  return gitDir;
+}
+
+/** Origin URL of a unit clone from its `.git/config` `[remote "origin"] url`
+ * — the same value `git remote get-url origin` prints (no `insteadOf`
+ * rewriting, which only ever applies to remote URL namespaces, not local
+ * paths). Null when unreadable. */
+function readGitOrigin(firstWorktree: string): string | null {
+  const gitDir = gitDirectoryFor(firstWorktree);
+  if (gitDir === null) return null;
+  try {
+    const config = readFileSync(join(gitCommonDirectoryFor(gitDir), "config"), "utf8");
+    return /\[remote "origin"\][^[]*?^\s*url\s*=\s*(.+)$/m.exec(config)?.[1]?.trim() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Current branch of a worktree from its `.git/HEAD`, with the same rule as
+ * `git branch --show-current`: a refs/heads symref yields the branch name,
+ * anything else (a detached SHA) yields "". Null when unreadable. */
+function readGitBranch(worktree: string): string | null {
+  const gitDir = gitDirectoryFor(worktree);
+  if (gitDir === null) return null;
+  try {
+    const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+    return head.startsWith("ref: refs/heads/") ? head.slice("ref: refs/heads/".length) : "";
+  } catch {
+    return null;
+  }
 }
 
 /** Unit checkouts whose origin path belongs to this project's known checkout
@@ -280,19 +304,13 @@ export function unitWorkspacesFor(entries: readonly UnitWorktreeEntry[], knownPa
   return workspaces;
 }
 
-/** Bounded-rate unit scan shared by every list() call: at most one filesystem
- * + git sweep per UNIT_SCAN_TTL_MS, result cached in the provider closure. */
-function createUnitScan(context: ServerPluginActivationContext, unitsRoot = join(homedir(), "units")) {
+/** Unit scan shared by every list() call: at most one filesystem sweep per
+ * UNIT_SCAN_TTL_MS, result cached in the provider closure. */
+function createUnitScan(unitsRoot = join(homedir(), "units")) {
   let cache: { at: number; value: UnitWorktreeEntry[] } = { at: 0, value: [] };
-  return async (signal: AbortSignal): Promise<UnitWorktreeEntry[]> => {
+  return (): UnitWorktreeEntry[] => {
     if (Date.now() - cache.at >= UNIT_SCAN_TTL_MS) {
-      cache = {
-        at: Date.now(),
-        value: await scanUnitWorktrees(
-          { runGit: async (cwd, args) => await runGit(context, cwd, args, signal) },
-          unitsRoot,
-        ),
-      };
+      cache = { at: Date.now(), value: scanUnitWorktrees(unitsRoot) };
     }
     return cache.value;
   };

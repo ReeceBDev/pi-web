@@ -423,37 +423,45 @@ describe("unit worktree workspaces", () => {
   });
 
   it("skips entries outside the units root, without .git, or with unusable git metadata", async () => {
-    const entries = await scanUnitWorktrees({ runGit: () => Promise.reject(new Error("git unavailable")) }, "/missing/units");
-    expect(entries).toEqual([]);
+    expect(scanUnitWorktrees("/missing/units")).toEqual([]);
+    const unitsRoot = await temporaryDirectory("units root unusable");
+    await mkdir(join(unitsRoot, "u1", "worktrees", "primary"), { recursive: true });
+    await mkdir(join(unitsRoot, "u2", "worktrees", "primary", ".git"), { recursive: true });
+    expect(scanUnitWorktrees(unitsRoot)).toEqual([]);
   });
 
-  it("reads the origin once per unit and every worktree branch in parallel", async () => {
-    const unitsRoot = await temporaryDirectory("units root origin dedupe");
-    const worktrees = async (unit: string, names: string[]) => {
-      const root = join(unitsRoot, unit, "worktrees");
-      for (const name of names) await mkdir(join(root, name), { recursive: true });
-      return names.map((name) => join(root, name));
+  it("reads origin once per unit and branches from repo files", async () => {
+    const unitsRoot = await temporaryDirectory("units root file reads");
+    const fullClone = async (unit: string, name: string, head: string) => {
+      const path = join(unitsRoot, unit, "worktrees", name);
+      await mkdir(join(path, ".git"), { recursive: true });
+      await writeFile(join(path, ".git", "config"), '[remote "origin"]\n\turl = /repos/main\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n', "utf8");
+      await writeFile(join(path, ".git", "HEAD"), head, "utf8");
+      return path;
     };
-    const primary = await worktrees("u1", ["primary", "second"]);
-    const lone = await worktrees("u2", ["primary"]);
-    for (const path of [...primary, ...lone]) await mkdir(join(path, ".git"), { recursive: true });
-    const originCalls: string[] = [];
-    const branchCalls: string[] = [];
-    const entries = await scanUnitWorktrees({
-      runGit: async (cwd, args) => {
-        if (args[0] === "remote") {
-          originCalls.push(cwd);
-          return { stdout: "/repos/main\n" };
-        }
-        branchCalls.push(cwd);
-        return { stdout: "main\n" };
-      },
-    }, unitsRoot);
+    await fullClone("u1", "primary", "ref: refs/heads/main\n");
+    await fullClone("u1", "second", "ref: refs/heads/dev\n");
+    // Linked worktree: `.git` is a file pointing into the shared clone, whose
+    // config lives in the common directory named by the commondir file.
+    const sharedClone = join(unitsRoot, "u2", "worktrees", "primary-clone.git");
+    const sharedGitDir = join(sharedClone, "worktrees", "primary");
+    await mkdir(sharedGitDir, { recursive: true });
+    await writeFile(join(sharedClone, "config"), '[remote "origin"]\n\turl = /repos/main\n', "utf8");
+    await writeFile(join(sharedGitDir, "commondir"), "../..\n", "utf8");
+    await writeFile(join(sharedGitDir, "HEAD"), "ref: refs/heads/agent/e2e-menu\n", "utf8");
+    await mkdir(join(unitsRoot, "u2", "worktrees", "primary"), { recursive: true });
+    await writeFile(join(unitsRoot, "u2", "worktrees", "primary", ".git"), `gitdir: ${sharedGitDir}\n`, "utf8");
+    await fullClone("u3", "primary", "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b\n");
 
-    expect(entries.map(({ label }) => label)).toEqual(["u1/primary", "u1/second", "u2/primary"]);
+    const entries = scanUnitWorktrees(unitsRoot);
+
+    expect(entries.map(({ label, branch }) => ({ label, branch }))).toEqual([
+      { label: "u1/primary", branch: "main" },
+      { label: "u1/second", branch: "dev" },
+      { label: "u2/primary", branch: "agent/e2e-menu" },
+      { label: "u3/primary", branch: "" },
+    ]);
     expect(entries.every(({ origin }) => origin === "/repos/main")).toBe(true);
-    expect(originCalls).toEqual([primary[0], lone[0]]);
-    expect(branchCalls).toEqual([...primary, ...lone]);
   });
 
   it("filters unit entries by origin path, dedupes paths, and omits empty branch fields", () => {
