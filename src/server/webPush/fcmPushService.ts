@@ -163,16 +163,21 @@ export class FcmPushService {
     if (!this.current(event) || event.unread === null) return;
     const tokens = this.deps.store.snapshot().tokens;
     if (tokens.length === 0) return;
-    // PII-minimal payload: constants and identifiers only, same rule as the launcher F9 spec.
+    // Payload: constants, identifiers, the session title and the completion
+    // timestamp (owner-requested 2026-11-09: launcher shows the session name
+    // and an hh:mm completion stamp instead of the cwd basename). The 4 KB
+    // FCM data-message cap bounds the title at SESSION_UNREAD_TITLE_MAX_LENGTH.
     const segments = event.cwd.split(/[\\/]/).filter(Boolean);
     const url = new URL(this.deps.baseUrl);
     url.search = new URLSearchParams({ session: event.sessionId, view: "chat" }).toString();
-    const data = {
+    const data: Record<string, string> = {
       conversationId: event.sessionId,
       title: "Task finished",
       body: segments[segments.length - 1] ?? event.sessionId,
+      completedAt: event.unread.completedAt,
       url: url.href,
     };
+    if (event.unread.title !== undefined) data["sessionTitle"] = event.unread.title;
     const identity = identityKey(event);
     if (this.sending.has(identity)) return;
     this.sending.add(identity);

@@ -8,6 +8,7 @@ import {
   SESSION_UNREAD_CWD_MAX_LENGTH,
   SESSION_UNREAD_LIMIT,
   SESSION_UNREAD_SESSION_ID_MAX_LENGTH,
+  SESSION_UNREAD_TITLE_MAX_LENGTH,
   type SessionUnreadAcknowledgeRequest,
   type SessionUnreadCatalogSnapshot,
   type SessionUnreadEvent,
@@ -113,7 +114,7 @@ export class SessionUnreadStore {
     };
   }
 
-  observeActivityState(sessionId: string, cwd: string, active: boolean): SessionUnreadMutation[] {
+  observeActivityState(sessionId: string, cwd: string, active: boolean, title?: string): SessionUnreadMutation[] {
     this.requireLoaded();
     const identity = requireIdentity(sessionId, cwd);
     const key = sessionIdentityKey(identity);
@@ -139,6 +140,7 @@ export class SessionUnreadStore {
       cwd,
       completionOrder,
       completedAt,
+      ...(title === undefined ? {} : { title }),
     };
     // Reinsert existing identities so map order remains completion order.
     this.unreadByIdentity.delete(key);
@@ -569,6 +571,7 @@ function parseSummary(value: unknown): SessionUnreadSummary {
     cwd: requireBoundedNonEmptyString(record["cwd"], "cwd", SESSION_UNREAD_CWD_MAX_LENGTH),
     completionOrder: requirePositiveSafeInteger(record["completionOrder"], "completionOrder"),
     completedAt,
+    ...(record["title"] === undefined ? {} : { title: requireBoundedNonEmptyString(record["title"], "title", SESSION_UNREAD_TITLE_MAX_LENGTH) }),
   };
 }
 

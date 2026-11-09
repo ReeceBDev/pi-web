@@ -76,9 +76,32 @@ describe("FcmPushService completion delivery", () => {
       conversationId: "s1",
       title: "Task finished",
       body: "demo",
+      completedAt: "2026-01-01T00:00:00.000Z",
       url: `${BASE_URL}?session=s1&view=chat`,
     });
     expect(service).toBeDefined();
+  });
+
+  it("carries the session title and omits the field when the summary has none", async () => {
+    const { hub, sends } = await harness();
+    hub.publishGlobal(unreadEvent({
+      catalogRevision: 2,
+      unread: { sessionId: "s1", cwd: "/work/demo", completionOrder: 1, completedAt: "2026-01-01T00:00:00.000Z", title: "Fix the login bug" },
+    }));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(sends.at(0)?.data).toEqual({
+      conversationId: "s1",
+      title: "Task finished",
+      body: "demo",
+      sessionTitle: "Fix the login bug",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      url: `${BASE_URL}?session=s1&view=chat`,
+    });
+
+    const { hub: bareHub, sends: bareSends } = await harness();
+    bareHub.publishGlobal(unreadEvent({ catalogRevision: 2 }));
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(bareSends.at(0)?.data["sessionTitle"]).toBeUndefined();
   });
 
   it("cancels a pending completion when the session is read before the window elapses", async () => {

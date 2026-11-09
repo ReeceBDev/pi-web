@@ -4065,6 +4065,9 @@ export class PiSessionService implements SessionRouteService {
       // missing completion is what silences the ding and the push. Status
       // display and hasActiveWork() are untouched.
       this.hasActiveWork(session) || this.isNotificationSuppressed(session),
+      // Carry the title so notifications can name the session instead of
+      // its cwd basename (box-launcher F7/F9 body).
+      session.sessionName,
     );
     if (mutations.length === 0) return;
     void this.publishUnreadMutations(mutations).catch(() => undefined);

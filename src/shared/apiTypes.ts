@@ -496,6 +496,7 @@ export const SESSION_UNREAD_SESSION_ID_MAX_LENGTH = 512;
 export const SESSION_UNREAD_CWD_MAX_LENGTH = 32 * 1024;
 export const SESSION_UNREAD_CATALOG_ID_MAX_LENGTH = 512;
 export const SESSION_UNREAD_COMPLETED_AT_MAX_LENGTH = 64;
+export const SESSION_UNREAD_TITLE_MAX_LENGTH = 200;
 
 export interface SessionUnreadSummary {
   sessionId: string;
@@ -503,6 +504,8 @@ export interface SessionUnreadSummary {
   /** Monotonic within a catalog and never greater than its containing revision. */
   completionOrder: number;
   completedAt: string;
+  /** Session title when known at completion; absent when unknown. Notification bodies prefer it over the cwd basename. */
+  title?: string;
 }
 
 export interface SessionUnreadCatalogSnapshot {

@@ -83,6 +83,29 @@ describe("SessionUnreadStore", () => {
     }).mutations).toEqual([]);
   });
 
+  it("records the session title on completion and keeps it through persistence", async () => {
+    const root = await mkdtemp(join(tmpdir(), "session-unread-title-"));
+    roots.push(root);
+    const filePath = join(root, "unread.json");
+    const store = persistedStore(new FileSessionUnreadPersistence(filePath), "catalog-t", "2026-07-20T00:00:00.000Z");
+    await store.load();
+
+    store.observeActivityState("session-1", "/repo", true, "Fix the login bug");
+    const completed = store.observeActivityState("session-1", "/repo", false, "Fix the login bug");
+    expect(completed[0]?.event.unread).toMatchObject({ sessionId: "session-1", title: "Fix the login bug" });
+    await store.flush();
+
+    const reloaded = persistedStore(new FileSessionUnreadPersistence(filePath), "catalog-t", "2026-07-20T00:00:00.000Z");
+    await reloaded.load();
+    expect(reloaded.catalogSnapshot().sessions[0]).toEqual({
+      sessionId: "session-1",
+      cwd: "/repo",
+      completionOrder: 1,
+      completedAt: "2026-07-20T00:00:00.000Z",
+      title: "Fix the login bug",
+    });
+  });
+
   it("rejects stale acknowledgements from a reset catalog epoch", () => {
     const store = storeAt("2026-07-20T00:00:00.000Z", "catalog-new");
     complete(store, "session-1", "/repo");
