@@ -12,7 +12,6 @@ import { ChatView } from "./ChatView";
 import type { ActionPalette } from "./ActionPalette";
 import { FormattedText } from "./FormattedText";
 import { WorkspacePanel } from "./WorkspacePanel";
-import { WorkspaceList } from "./WorkspaceList";
 import { ProjectList } from "./ProjectList";
 import { SessionList } from "./SessionList";
 import { loadNavigationPreferences, saveNavigationPreferences } from "../navigationPreferences";
@@ -370,7 +369,7 @@ describe("application rendering boundaries", () => {
     const workspacePanel = app.shadowRoot?.querySelector("workspace-panel");
     if (!(workspacePanel instanceof WorkspacePanel)) throw new Error("Expected workspace panel");
     const workspaceRender = vi.spyOn(workspacePanel, "render");
-    const lists = [ProjectList, WorkspaceList, SessionList].map((component) => vi.spyOn(component.prototype, "render"));
+    const lists = [ProjectList, SessionList].map((component) => vi.spyOn(component.prototype, "render"));
     panelRender.mockClear();
 
     patchState(app, { messages: [{ role: "assistant", parts: [{ type: "text", text: "streaming" }] }] });
@@ -398,8 +397,6 @@ describe("application rendering boundaries", () => {
     expect(panelRender).toHaveBeenCalledOnce();
     expect(app.shadowRoot?.querySelector("workspace-panel")?.shadowRoot?.textContent).toContain("Refreshed: no session");
     expect(app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelector(".tab-badge")?.textContent).toBe("Refreshed");
-    const navigation = app.shadowRoot?.querySelector("app-navigation-panel");
-    expect(navigation?.shadowRoot?.querySelector("workspace-list")?.shadowRoot?.textContent).toContain("Refreshed");
 
     panelRender.mockClear();
     patchState(app, { selectedSession: session, sessions: [session] });
