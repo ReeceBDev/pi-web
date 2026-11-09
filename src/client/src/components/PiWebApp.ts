@@ -779,7 +779,17 @@ export class PiWebApp extends LitElement {
       // chat directly instead of clearing selection into the project listing.
       // ponytail: catalog may omit a very old session — falls back to the listing.
       if (route.sessionId !== undefined && (route.projectId === undefined || route.projectId === "")) {
-        const resolved = this.resolveRouteProjectForSession(route.sessionId);
+        let resolved = this.resolveRouteProjectForSession(route.sessionId);
+        if (resolved === undefined) {
+          // The loaded catalog can omit the session transiently: sessiond
+          // serves a partial list during its post-restart scan, the front
+          // degrades a failed workspace listing to an empty array, and a
+          // bfcache restore keeps stale state. Refetch once, then fall back
+          // to the project listing.
+          await this.projects.loadProjects();
+          if (!selectionNavigation.isCurrent()) return;
+          resolved = this.resolveRouteProjectForSession(route.sessionId);
+        }
         if (resolved !== undefined) {
           route.projectId = resolved.project.id;
           route.workspaceId = resolved.workspace.id;
