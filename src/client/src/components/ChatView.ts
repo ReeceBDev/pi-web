@@ -449,6 +449,7 @@ export class ChatView extends LitElement {
           ${this.renderExtensionDialogs()}
         </div>
         ${this.renderActivityDock()}
+        ${this.pinnedToBottom ? null : this.renderJumpToBottom()}
       </div>
       ${this.renderImageZoom()}
     `;
@@ -608,6 +609,22 @@ export class ChatView extends LitElement {
       || this.status?.isCompacting === true
       || this.status?.isBashRunning === true
       || this.activity?.phase === "active";
+  }
+
+  /** rbowen (jumpbtn): scroll-to-bottom pill; shown only when the transcript is not pinned to (following) the bottom. Anchored to .chat-wrap's bottom-right, which sits directly above the prompt editor, so the viewport-resize keyboard behavior lifts it with the input. */
+  private renderJumpToBottom() {
+    return html`
+      <button type="button" class="jump-to-bottom" title="Scroll to bottom" aria-label="Scroll to bottom" @click=${() => { this.jumpToBottom(); }}>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14m0 0-6-6m6 6 6-6" /></svg>
+      </button>
+    `;
+  }
+
+  private jumpToBottom() {
+    // Clear the touch guard so the pending rAF scroll is not dropped as a user scroll.
+    this.userScrollUntil = 0;
+    this.pinnedToBottom = true;
+    this.scrollToBottom();
   }
 
   private renderActivityDock() {
@@ -992,6 +1009,12 @@ export class ChatView extends LitElement {
     this.updatePinnedToBottomFromScroll();
     this.scheduleConversationRailUpdate();
     if (!this.suppressScrollSave) this.scheduleScrollPositionSave();
+    // Keep the fling guard alive for momentum's whole tail: touch events end
+    // before inertia does, so re-arming only while already active let flings
+    // longer than the touch window lose protection and get yanked by a
+    // message-delta re-pin mid-swipe. Programmatic writes (scrollToBottom,
+    // prepend restore) run under suppressScrollSave, so they never extend it.
+    if (!this.suppressScrollSave) this.userScrollUntil = Date.now() + 300;
   }
 
   private onWheel(event: WheelEvent) {
@@ -1032,6 +1055,7 @@ export class ChatView extends LitElement {
     }
     if (this.userScrollActive()) {
       if (scrollingUp || !this.isNearBottom()) this.pinnedToBottom = false;
+      else if (this.isAtBottom()) this.pinnedToBottom = true;
     } else if (this.isAtBottom()) this.pinnedToBottom = true;
     else if (scrollingUp) this.pinnedToBottom = false;
     else this.pinnedToBottom = this.isNearBottom();

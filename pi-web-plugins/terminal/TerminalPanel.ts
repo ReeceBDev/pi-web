@@ -22,7 +22,9 @@ const TERMINAL_OPTIONS_BASE: ITerminalOptions = {
 };
 
 const DEFAULT_TERMINAL_SIZE: TerminalSize = { cols: 100, rows: 30 };
-const COMMAND_RUN_POLL_INTERVAL_MS = 1000;
+// ponytail: 5s poll over WAN each on a fresh connection; move to the
+// WebSocket event stream if command-run latency matters.
+const COMMAND_RUN_POLL_INTERVAL_MS = 5000;
 // A requested terminal id that never appears in the loaded list must not turn
 // every render into another list fetch; a few tries cover creation races.
 const REQUESTED_TERMINAL_RELOAD_LIMIT = 3;
