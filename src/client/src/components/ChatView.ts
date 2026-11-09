@@ -431,7 +431,8 @@ export class ChatView extends LitElement {
       ${this.renderNotificationLiveRegions()}
       <div class="chat-wrap">
         ${this.renderConversationRail()}
-        <div class="chat" data-image-scroll-root @image-will-layout=${this.onImageWillLayout} @image-layout=${this.onImageLayout} @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }} @scroll=${() => { this.onScroll(); }} @wheel=${(event: WheelEvent) => { this.onWheel(event); }} @touchstart=${(event: TouchEvent) => { this.onTouchStart(event); }} @touchmove=${(event: TouchEvent) => { this.onTouchMove(event); }} @touchend=${() => { this.onTouchEnd(); }} @touchcancel=${() => { this.onTouchEnd(); }}>
+        <div class="chat" data-image-scroll-root @image-will-layout=${this.onImageWillLayout} @image-layout=${this.onImageLayout} @image-open=${(event: CustomEvent<ImageOpenDetail>) => { this.openImageZoom(event.detail.src, event.detail.alt); }} @scroll=${() => { this.onScroll(); }} @touchstart=${{ handleEvent: (event: TouchEvent) => { this.onTouchStart(event); }, passive: true }} @touchmove=${{ handleEvent: (event: TouchEvent) => { this.onTouchMove(event); }, passive: true }} @touchend=${{ handleEvent: () => { this.onTouchEnd(); }, passive: true }} @touchcancel=${{ handleEvent: () => { this.onTouchEnd(); }, passive: true }}>
+          <!-- rbowen (scrollfix2): all wheel/touch listeners passive. None preventDefault; as blocking listeners a non-passive touchmove routes every swipe through the busy main thread, so the chat sticks mid-scroll when streaming renders run. Replay of beaaa10f (reverted in f267a7da for the misattributed scrollTop-write fight, fixed by d6d43394/ef674c09). -->
           ${this.renderHistoryBoundary()}
           ${keyed(transcriptIdentity, repeat(
             groups,
