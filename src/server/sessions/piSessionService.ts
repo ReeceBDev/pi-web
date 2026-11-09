@@ -4331,7 +4331,10 @@ export class PiSessionService implements SessionRouteService {
   }
 
   private maybeGenerateSessionName(session: PiAgentSession, firstMessage: string): void {
-    if (session.sessionName !== undefined || session.messages.length !== 0 || session.isStreaming || session.isCompacting) return;
+    // Extensions inject custom/system preamble at attach time, so a non-empty
+    // transcript does not mean the conversation started. Only a user message
+    // marks it — otherwise naming never fires on the sendPrompt path.
+    if (session.sessionName !== undefined || session.messages.some((message) => isRecord(message) && message["role"] === "user") || session.isStreaming || session.isCompacting) return;
 
     const deterministicName = deterministicSessionName(firstMessage);
     if (deterministicName !== undefined) {

@@ -146,6 +146,30 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
     await service.dispose();
   });
 
+  it("names the session even when extension preamble messages exist before the first prompt", async () => {
+    // Regression: extensions inject custom/system preamble at attach time, so
+    // a message-count guard blocked naming on every fresh session and the
+    // box-launcher notification fell back to the raw session id.
+    const streamFn: StreamFn = () => createAssistantMessageEventStream(); // never settles
+    const fake = fakeRuntime("preamble-name-session", {
+      model: testModel(),
+      agent: { streamFunction: streamFn },
+      messages: [{ role: "custom", customType: "mode-rules", content: "rules", display: true, timestamp: Date.now() }],
+    });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("preamble-name-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.prompt(sessionRef("preamble-name-session"), "Please fix the login bug");
+
+    expect(fake.session.sessionName).toBe("Please fix the login bug");
+    await service.dispose();
+  });
+
   it("includes queued message details in session status", async () => {
     const fake = fakeRuntime("status-session", {
       messages: [{ role: "user", content: "hello" }, { role: "assistant", content: "hi" }],
