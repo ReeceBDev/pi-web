@@ -126,6 +126,26 @@ describe("PiSessionService prompt, queue, and auth warnings", () => {
     await service.dispose();
   });
 
+  it("names the session synchronously from the fallback even when the LLM title never lands", async () => {
+    // Regression: a completion racing the async LLM title used to snapshot an
+    // unnamed session into the unread record, so the box-launcher push fell
+    // back to the raw session id.
+    const streamFn: StreamFn = () => createAssistantMessageEventStream(); // never settles
+    const fake = fakeRuntime("fallback-name-session", { model: testModel(), agent: { streamFunction: streamFn } });
+    const service = new PiSessionService(new CapturingSessionEventHub(), {
+      agentDir: TEST_AGENT_DIR,
+      modelRuntime: testModelRuntime,
+      createAgentRuntime: runtimeCreator(fake.runtime),
+      sessionManager: sessionGateway([sessionRecord("fallback-name-session")]),
+      heartbeatIntervalMs: 60_000,
+    });
+
+    await service.prompt(sessionRef("fallback-name-session"), "Please fix the login bug");
+
+    expect(fake.session.sessionName).toBe("Please fix the login bug");
+    await service.dispose();
+  });
+
   it("includes queued message details in session status", async () => {
     const fake = fakeRuntime("status-session", {
       messages: [{ role: "user", content: "hello" }, { role: "assistant", content: "hi" }],

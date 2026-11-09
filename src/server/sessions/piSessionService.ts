@@ -4342,15 +4342,22 @@ export class PiSessionService implements SessionRouteService {
     const model = session.model;
     if (model === undefined) return;
 
+    // Provisional synchronous fallback first: a completion that races the
+    // async LLM title must still snapshot a name — the completion-time
+    // unread record (and the box-launcher push body) is never backfilled.
+    const fallback = fallbackSessionName(firstMessage);
+    this.applyGeneratedSessionName(session, fallback);
+
     void generateShortSessionName(session.agent.streamFunction, model, firstMessage).then((name) => {
-      this.applyGeneratedSessionName(session, name ?? fallbackSessionName(firstMessage));
-    }).catch(() => {
-      this.applyGeneratedSessionName(session, fallbackSessionName(firstMessage));
-    });
+      // Upgrade the provisional fallback to the LLM title; skip when no
+      // fallback was applied or the user renamed the session meanwhile.
+      if (name === undefined || fallback === undefined || session.sessionName !== fallback) return;
+      this.applyGeneratedSessionName(session, name, true);
+    }).catch(() => undefined);
   }
 
-  private applyGeneratedSessionName(session: PiAgentSession, name: string | undefined): void {
-    if (name === undefined || session.sessionName !== undefined) return;
+  private applyGeneratedSessionName(session: PiAgentSession, name: string | undefined, upgrade = false): void {
+    if (name === undefined || (!upgrade && session.sessionName !== undefined)) return;
     if (this.treeNavigations.has(session)) {
       this.deferredGeneratedSessionNames.set(session, name);
       return;
