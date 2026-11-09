@@ -27,3 +27,14 @@ To finish this: trace which client component issues terminal.list-runs for every
 ## Verification rbowen can do
 
 Send himself a task-finished push (or wait for the next one), tap it: Hephaestus should open straight into that chat within a couple of seconds on a quiet server. If it still lands on the listing, check whether the tapped session id exists in `/api/machines/local/projects/catalog` (fallback path) and check `pi-web` journal for the jam storm above.
+
+## Continuation 2026-11-09 ~02:20 UTC — fan-out traced and capped (shipped)
+
+Both client-side causes of the jam are fixed, tested, committed (`1acfeefa`, `9f923d8e`), pushed (`736a8845..9f923d8e main`, includes concurrent agent's `4d469963`), built, and deployed: served bundle `index-CVx0YpbH.js` contains the sweep gate; pi-web.service restarted 02:16:36 (sessiond untouched).
+
+1. **Deletion-sweep fan-out (the parked jam).** `PiWebApp.refreshWorkspaceDeletionRuns()` swept `terminal.list-runs` across every workspace of the selected project on every browser resume and route restore, even with nothing tracked. During a sessiond jam each call ran ~10s, queued refreshes re-fired the sweep, and phone boots queued 56-85s behind it. Fix: discovery runs once per machine+project+workspace-set key; tracked pending runs still poll narrowly; a failed sweep clears the key so the next resume retries. Regression test in `PiWebApp.pluginHost.test.ts`.
+2. **Terminal list hot loop (found while tracing).** `TerminalPanel.shouldReloadForRequestedTerminal()` refetched `terminal.list` on every render while the URL's requested terminal id was missing from the list and `navigation.set` rejected (observed live: 264 requests in ~3 min for one workspace). Fix: capped at 3 reloads per requested id; counter resets when the id or workspace changes. Regression test in `TerminalPanel.test.ts`.
+
+Verified after deploy: the 1.1s `terminal.list` loop stopped (0 requests in 2 min), sessiond `timed out after 10000ms` count is 0 for the last 5 min (was 185 in the prior 30). Full client suite green (5025 tests), typecheck and lint clean.
+
+Still open (rbowen's call): sessiond's per-call git worktree listing can still take 10s. The concurrent agent's `4d469963` (read unit worktree origin/branch from repo files instead of spawning git) is in the deployed dist but pi-web-sessiond was not restarted, so it is not loaded. A sessiond restart would activate it and interrupt live agent sessions. Re-detect recurrence with: `journalctl --user -u pi-web-sessiond --since '-30 min' --no-pager | grep -c 'timed out after 10000ms'`.
