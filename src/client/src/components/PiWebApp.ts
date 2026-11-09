@@ -773,6 +773,17 @@ export class PiWebApp extends LitElement {
       // Awaited only for tool routes; the load reports its own failures.
       pluginsReady.catch(() => undefined);
       const route = resolveAppRoute({ ...parsedRoute, tool: undefined }, () => undefined);
+      // Session-only deep link (box-launcher push tap: ?session=S&view=chat with no
+      // project/workspace): resolve both from the loaded catalog so the tap opens the
+      // chat directly instead of clearing selection into the project listing.
+      // ponytail: catalog may omit a very old session — falls back to the listing.
+      if (route.sessionId !== undefined && (route.projectId === undefined || route.projectId === "")) {
+        const resolved = this.resolveRouteProjectForSession(route.sessionId);
+        if (resolved !== undefined) {
+          route.projectId = resolved.project.id;
+          route.workspaceId = resolved.workspace.id;
+        }
+      }
       const unavailablePanelViewRoute = parsedRoute.view !== undefined && route.view === undefined;
       const restoredWorkspaceIdentity = workspaceRouteIdentity(route);
       const baseFinishOptions: WorkspaceRouteFinishOptions = {
@@ -1095,6 +1106,21 @@ export class PiWebApp extends LitElement {
     if (this.remoteRouteRestoreTimer === undefined) return;
     window.clearTimeout(this.remoteRouteRestoreTimer);
     this.remoteRouteRestoreTimer = undefined;
+  }
+
+  /**
+   * Locate a session id in the loaded catalog and return its project and workspace,
+   * so a session-only route can select the chat without a workspace-listing wait.
+   */
+  private resolveRouteProjectForSession(sessionId: string): { project: Project; workspace: Workspace } | undefined {
+    for (const project of this.state.projects) {
+      for (const workspace of this.state.workspacesByProjectId[project.id] ?? []) {
+        if ((this.state.sessionsByWorkspacePath[workspace.path] ?? []).some((session) => sessionMatchesRouteTarget(session.id, sessionId))) {
+          return { project, workspace };
+        }
+      }
+    }
+    return undefined;
   }
 
   private async restoreRouteMachine(route: ParsedAppRoute, updateUrl: boolean): Promise<boolean> {
