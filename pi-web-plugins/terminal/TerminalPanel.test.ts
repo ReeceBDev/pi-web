@@ -583,6 +583,29 @@ describe("Terminal panel lifecycle", () => {
     panel.disconnectedCallback();
   });
 
+  it("stops reloading the list when a rejecting host keeps the missing requested terminal routed", async () => {
+    const panel = createTerminalPanel();
+    const request = vi.fn((operation: string): Promise<JsonValue> =>
+      Promise.resolve(operation === "terminal.list" ? [terminalInfo("other-shell")] : []));
+    const rejectingNavigation = { ...terminalNavigation("ghost-terminal"), set: vi.fn(() => false) };
+    panel.context = terminalContext({ peer: terminalPeer(request), navigation: rejectingNavigation });
+    panel.runtime = new TerminalBrowserRuntime(new InMemoryTerminalSelectionMemory());
+    Reflect.set(panel, "visible", true);
+    callPanelMethod(panel, "willUpdate");
+    await callAsyncPanelMethod(panel, "loadTerminals");
+    const reload = vi.fn(() => Promise.resolve());
+    Reflect.set(panel, "loadTerminals", reload);
+
+    callPanelMethod(panel, "updated");
+    callPanelMethod(panel, "updated");
+    callPanelMethod(panel, "updated");
+    expect(reload).toHaveBeenCalledTimes(3);
+    callPanelMethod(panel, "updated");
+    callPanelMethod(panel, "updated");
+    expect(reload).toHaveBeenCalledTimes(3);
+    panel.disconnectedCallback();
+  });
+
   it("reattaches after a clean close when the authoritative terminal remains active", async () => {
     const panel = createTerminalPanel();
     const channel = { closed: new Promise<never>(() => undefined), send: vi.fn(), close: vi.fn() };

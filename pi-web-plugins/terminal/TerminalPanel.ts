@@ -23,6 +23,9 @@ const TERMINAL_OPTIONS_BASE: ITerminalOptions = {
 
 const DEFAULT_TERMINAL_SIZE: TerminalSize = { cols: 100, rows: 30 };
 const COMMAND_RUN_POLL_INTERVAL_MS = 1000;
+// A requested terminal id that never appears in the loaded list must not turn
+// every render into another list fetch; a few tries cover creation races.
+const REQUESTED_TERMINAL_RELOAD_LIMIT = 3;
 const CHANNEL_RECONNECT_DELAYS_MS = [250, 500, 1_000, 2_000, 5_000] as const;
 const WORKSPACE_LOAD_RETRY_DELAYS_MS = [1_000, 2_000, 5_000] as const;
 
@@ -92,6 +95,7 @@ export class TerminalPanel extends LitElement {
   private requestedAutoStartRequest: string | undefined;
   private routedTerminalId: string | undefined;
   private requestedTerminalId: string | undefined;
+  private requestedTerminalReloadAttempts = 0;
   private pendingTerminalNavigation: { context: WorkspacePanelContext; terminalId: string | undefined } | undefined;
   private commandRunPollTimer: number | undefined;
   private readonly softKeysDefaultEnvironmentMedia = createTerminalSoftKeysDefaultEnvironmentMedia();
@@ -171,6 +175,7 @@ export class TerminalPanel extends LitElement {
       this.requestedAutoStartRequest = requestedAutoStart;
       this.routedTerminalId = routedTerminalId;
       this.requestedTerminalId = requestedTerminalId;
+      this.requestedTerminalReloadAttempts = 0;
       this.pendingTerminalNavigation = undefined;
       this.terminals = [];
       this.commandRuns = [];
@@ -189,6 +194,7 @@ export class TerminalPanel extends LitElement {
       this.terminalNavigationGeneration += 1;
       this.routedTerminalId = routedTerminalId;
       this.requestedTerminalId = requestedTerminalId;
+      this.requestedTerminalReloadAttempts = 0;
       this.applyRequestedTerminalSelection();
     }
     if (requestedAutoStart !== this.requestedAutoStartRequest) this.requestedAutoStartRequest = requestedAutoStart;
@@ -202,7 +208,10 @@ export class TerminalPanel extends LitElement {
     }
     if (this.hasPendingCommandRuns()) this.updateCommandRunPolling(true);
     this.loadVisibleWorkspaceTerminals();
-    if (this.shouldReloadForRequestedTerminal()) void this.loadTerminals();
+    if (this.shouldReloadForRequestedTerminal()) {
+      this.requestedTerminalReloadAttempts += 1;
+      void this.loadTerminals();
+    }
     // A list can settle before the host finishes resolving the workspace URL.
     // Its selection write is correctly rejected then; reconcile with the latest
     // context even when the routed/remembered terminal IDs have not changed.
@@ -316,6 +325,7 @@ export class TerminalPanel extends LitElement {
       && this.observedWorkspaceScope !== undefined
       && this.observedWorkspaceScope === this.loadedWorkspaceScope
       && this.requestedTerminalId !== undefined
+      && this.requestedTerminalReloadAttempts < REQUESTED_TERMINAL_RELOAD_LIMIT
       && !this.loading
       && this.loadRetryTimer === undefined
       && !this.terminals.some((terminal) => terminal.id === this.requestedTerminalId);
