@@ -3061,6 +3061,45 @@ describe("PiWebApp plugin host", () => {
     expect(Reflect.get(app, "workspaceDeletionPollTimer")).toBeUndefined();
   });
 
+  it("sweeps workspaces for deletion runs once per scope and skips repeat sweeps", async () => {
+    const commandWorkspace: Workspace = { ...workspace, id: "workspace-command", path: "/repo", label: "main", isMain: true };
+    const targetWorkspace: Workspace = { ...workspace, id: "workspace-target", path: "/repo-target", label: "target", isMain: false };
+    const app = createApp();
+    setAppState(app, {
+      ...initialAppState(),
+      selectedProject: project,
+      selectedWorkspace: commandWorkspace,
+      workspaces: [commandWorkspace, targetWorkspace],
+    });
+    await markPluginLoadingReady(app);
+    const compositions: unknown = Reflect.get(app, "requiredTerminalByMachine");
+    if (!(compositions instanceof Map)) throw new Error("PiWebApp required Terminal composition map was unavailable");
+    const composition: unknown = compositions.get("local");
+    if (!isRequiredTerminalComposition(composition)) throw new Error("Local Terminal composition was unavailable");
+    compositions.set("local", { ...composition, facade: new TerminalFacade() });
+    const listRuns = vi.fn(() => Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } })));
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("terminal.list-runs")) return listRuns();
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200, headers: { "content-type": "application/json" } }));
+    }));
+
+    await callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
+    expect(listRuns).toHaveBeenCalledTimes(2);
+
+    await callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
+    expect(listRuns).toHaveBeenCalledTimes(2);
+
+    setAppState(app, {
+      ...initialAppState(),
+      selectedProject: project,
+      selectedWorkspace: commandWorkspace,
+      workspaces: [commandWorkspace, targetWorkspace, { ...workspace, id: "workspace-new", path: "/repo-new", label: "new", isMain: false }],
+    });
+    await callAsyncAppMethod(app, "refreshWorkspaceDeletionRuns");
+    expect(listRuns).toHaveBeenCalledTimes(5);
+  });
+
   it("aborts an old project deletion refresh and lets the new scope refresh immediately", async () => {
     const otherProject: Project = { id: "project-2", name: "Other", path: "/other", createdAt: "now" };
     const otherWorkspace: Workspace = { ...workspace, id: "workspace-2", projectId: otherProject.id, path: "/other", label: "other" };

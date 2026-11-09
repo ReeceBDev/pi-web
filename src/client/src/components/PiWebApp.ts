@@ -274,6 +274,7 @@ export class PiWebApp extends LitElement {
   private workspaceDeletionRefreshScope: string | undefined;
   private workspaceDeletionRefreshQueued = false;
   private workspaceDeletionRefreshGeneration = 0;
+  private workspaceDeletionDiscoveryKey: string | undefined;
   private readonly workspaceDeletionReconcileRetries = new Map<string, { attempt: number; retryAt: number }>();
   private readonly handledWorkspaceDeletionRunIds = new Set<string>();
   private readonly requiredTerminalByMachine = new Map<string, RequiredTerminalBrowserComposition>();
@@ -2915,6 +2916,13 @@ export class PiWebApp extends LitElement {
 
       const composition = this.requiredTerminalComposition(machineId);
       const filter = workspaceDeletionRunFilter();
+      // Sweeping every workspace to discover deletion runs is only worth doing
+      // once per scope; redo it when the machine, project, or workspace set changes.
+      const discoveryKey = `${machineId}:${project.id}:${this.state.workspaces.map((workspace) => workspace.id).join(",")}`;
+      if (pendingRuns.length === 0) {
+        if (this.workspaceDeletionDiscoveryKey === discoveryKey) return;
+        this.workspaceDeletionDiscoveryKey = discoveryKey;
+      }
       const queryWorkspaces: Pick<Workspace, "id" | "projectId">[] = pendingRuns.length === 0
         ? this.state.workspaces.filter((workspace) => workspace.projectId === project.id)
         : [...new Map(pendingRuns.map((run) => [run.workspaceId, { id: run.workspaceId, projectId: run.projectId }])).values()];
@@ -2950,6 +2958,8 @@ export class PiWebApp extends LitElement {
     } catch (error) {
       if (!controller.signal.aborted && this.workspaceDeletionRefreshIsCurrent(machineId, project.id, generation, controller)) {
         console.warn("Failed to refresh workspace deletion runs", error);
+        // Allow a later resume to retry a failed discovery sweep.
+        this.workspaceDeletionDiscoveryKey = undefined;
       }
     } finally {
       if (this.workspaceDeletionRefreshAbort === controller) {
