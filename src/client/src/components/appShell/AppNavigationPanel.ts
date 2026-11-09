@@ -1,8 +1,7 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property, query } from "lit/decorators.js";
-import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus, Workspace } from "../../api";
+import type { Machine, MachineHealth, Project, SessionActivity, SessionInfo, SessionStatus } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
-import type { WorkspaceLabelItem } from "../../plugins/types";
 import { selectedMachineId } from "../../controllers/types";
 import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
@@ -10,7 +9,6 @@ import type { KeyboardNavigableSection } from "../navigationFocus";
 import "../MachineList";
 import "../MachineSwitcher";
 import "../ProjectList";
-import "../WorkspaceList";
 import "../SessionList";
 
 export type NavigationFocusTarget = NavigationSection | "chat";
@@ -25,41 +23,29 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
   @property({ attribute: false }) projects: Project[] = [];
   @property({ attribute: false }) selectedProject?: Project;
-  @property({ attribute: false }) workspaces: Workspace[] = [];
-  @property({ attribute: false }) selectedWorkspace?: Workspace;
   @property({ attribute: false }) sessions: SessionInfo[] = [];
   @property({ attribute: false }) selectedSession?: SessionInfo;
   @property({ attribute: false }) sessionActivities: Record<string, SessionActivity> = {};
   @property({ attribute: false }) sessionStatuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) sendingPrompts: Record<string, true> = {};
   @property({ attribute: false }) unreadSessionIds: ReadonlySet<string> = new Set();
-  @property({ attribute: false }) deletingWorkspaceIds: string[] = [];
-  // Unlike event callbacks, this provider affects rendered content; replacements
-  // must remain reactive inputs to WorkspaceList.
-  @property({ attribute: false }) workspaceLabelItems: (workspace: Workspace) => WorkspaceLabelItem[] = () => [];
   @property({ attribute: false }) refreshControl: unknown;
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) compact = false;
   @property({ type: Boolean }) machinesCollapsed = false;
   @property({ type: Boolean }) projectsCollapsed = false;
-  @property({ type: Boolean }) workspacesCollapsed = false;
   @property({ type: Boolean }) sessionsCollapsed = false;
   @property({ type: Number }) startingSessionCount = 0;
   @property({ type: Boolean }) canStartSession = false;
-  // rbowen (wstoggle): Workspaces section visibility and the Projects/Sessions
-  // split, persisted in localStorage; wired up in the constructor below.
-  @property({ attribute: false }) workspacesHidden = false;
+  // rbowen (wstoggle): Projects/Sessions split, persisted in localStorage.
   @property({ attribute: false }) projectsHidden = false;
   @property({ attribute: false }) projectsFlex = 50;
   @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
-  @property({ attribute: false }) onToggleWorkspaces?: () => void;
   @property({ attribute: false }) onToggleSessions?: () => void;
   @property({ attribute: false }) onSelectProject?: (project: Project) => void | Promise<void>;
   @property({ attribute: false }) onCloseProject?: (project: Project) => void | Promise<void>;
-  @property({ attribute: false }) onSelectWorkspace?: (workspace: Workspace) => void | Promise<void>;
-  @property({ attribute: false }) onDeleteWorkspace?: (workspace: Workspace) => void | Promise<void>;
   @property({ attribute: false }) onStartSession?: () => void | Promise<void>;
   @property({ attribute: false }) onStartPlain?: () => void | Promise<void>;
   @property({ attribute: false }) unitMenuCwd?: string | undefined;
@@ -88,12 +74,10 @@ export class AppNavigationPanel extends LitElement {
   @query("machine-list") private machineList?: KeyboardNavigableSection;
   @query("machine-switcher") private machineSwitcher?: KeyboardNavigableSection;
   @query("project-list") private projectList?: KeyboardNavigableSection;
-  @query("workspace-list") private workspaceList?: KeyboardNavigableSection;
   @query("session-list") private sessionList?: KeyboardNavigableSection;
 
   constructor() {
     super();
-    this.workspacesHidden = localStorage.getItem("pi-web.workspacesHidden") !== "0";
     this.projectsHidden = localStorage.getItem("pi-web.projectsHidden") === "1";
     const flex = Number(localStorage.getItem("pi-web.projectsFlex"));
     this.projectsFlex = flex >= 5 && flex <= 95 ? flex : 50;
@@ -104,7 +88,7 @@ export class AppNavigationPanel extends LitElement {
     switch (section) {
       case "machines": return await this.focusNavigableSection(this.compact ? this.machineList : this.machineSwitcher);
       case "projects": return await this.focusNavigableSection(this.projectList);
-      case "workspaces": return await this.focusNavigableSection(this.workspaceList);
+      case "workspaces": return false;
       case "sessions": return await this.focusNavigableSection(this.sessionList);
     }
   }
@@ -114,9 +98,6 @@ export class AppNavigationPanel extends LitElement {
     toggleProjects: () => { this.onToggleProjects?.(); },
     selectProject: (project: Project) => this.onSelectProject?.(project),
     closeProject: (project: Project) => this.onCloseProject?.(project),
-    toggleWorkspaces: () => { this.onToggleWorkspaces?.(); },
-    selectWorkspace: (workspace: Workspace) => this.onSelectWorkspace?.(workspace),
-    deleteWorkspace: (workspace: Workspace) => this.onDeleteWorkspace?.(workspace),
     toggleSessions: () => { this.onToggleSessions?.(); },
     archivedCollapsed: () => this.onArchivedCollapsed?.(),
     startSession: () => this.onStartSession?.(),
@@ -139,8 +120,6 @@ export class AppNavigationPanel extends LitElement {
     cleanupSessions: () => this.onCleanupSessions?.(),
     previousFromProjects: () => { this.focusPreviousFrom("projects"); },
     nextFromProjects: () => { this.focusNextFrom("projects"); },
-    previousFromWorkspaces: () => { this.focusPreviousFrom("workspaces"); },
-    nextFromWorkspaces: () => { this.focusNextFrom("workspaces"); },
     previousFromSessions: () => { this.focusPreviousFrom("sessions"); },
     nextFromSessions: () => { this.focusNextFrom("sessions"); },
     cancelKeyboardNavigation: () => { this.cancelKeyboardNavigation(); },
@@ -167,7 +146,6 @@ export class AppNavigationPanel extends LitElement {
         <div class="header-actions">
           ${this.refreshControl}
           <button title=${this.projectsHidden ? "Show the Projects section" : "Hide the Projects section"} aria-pressed=${String(!this.projectsHidden)} @click=${() => { this.projectsHidden = !this.projectsHidden; localStorage.setItem("pi-web.projectsHidden", this.projectsHidden ? "1" : "0"); }}>Projects</button>
-          <button title=${this.workspacesHidden ? "Show the Workspaces section" : "Hide the Workspaces section"} aria-pressed=${String(!this.workspacesHidden)} @click=${() => { this.workspacesHidden = !this.workspacesHidden; localStorage.setItem("pi-web.workspacesHidden", this.workspacesHidden ? "1" : "0"); }}>Workspaces</button>
           <button title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>Actions</button>
         </div>
       </header>
@@ -202,26 +180,8 @@ export class AppNavigationPanel extends LitElement {
         .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
       ></project-list>
       <div class="section-resizer" title="Drag to resize Projects vs Sessions" @pointerdown=${(event: PointerEvent) => { this.startSectionResize(event); }}></div>
-      <workspace-list
-        ?hidden=${this.workspacesHidden && !this.compact}
-        style=${`flex-grow:${String(Math.max(1, Math.round((100 - this.projectsFlex) / 3)))}`}
-        .workspaces=${this.workspaces}
-        .selected=${this.selectedWorkspace}
-        .machineId=${this.selectedMachine?.id ?? "local"}
-        .statusSnapshot=${this.selectedMachineStatusSnapshot()}
-        .deletingWorkspaceIds=${this.deletingWorkspaceIds}
-        .collapsible=${false}
-        .collapsed=${false}
-        .workspaceLabelItems=${this.workspaceLabelItems}
-        .onToggleCollapsed=${this.childCallbacks.toggleWorkspaces}
-        .onSelect=${this.childCallbacks.selectWorkspace}
-        .onDelete=${this.childCallbacks.deleteWorkspace}
-        .onFocusPreviousSection=${this.childCallbacks.previousFromWorkspaces}
-        .onFocusNextSection=${this.childCallbacks.nextFromWorkspaces}
-        .onCancelKeyboardNavigation=${this.childCallbacks.cancelKeyboardNavigation}
-      ></workspace-list>
       <session-list
-        style=${`flex-grow:${String(this.workspacesHidden && !this.compact ? 100 - this.projectsFlex : 2 * Math.round((100 - this.projectsFlex) / 3))}`}
+        style=${`flex-grow:${String(100 - this.projectsFlex)}`}
         .sessions=${this.sessions}
         .statuses=${this.sessionStatuses}
         .activities=${this.sessionActivities}
@@ -321,13 +281,12 @@ export class AppNavigationPanel extends LitElement {
     /* Expanded sections share the panel height equally, so collapsing one
        section distributes its space to every remaining section, not just the
        session list. Collapsed sections keep only their heading height. */
-    machine-list, project-list, workspace-list, session-list { flex: 1 1 0px; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
+    machine-list, project-list, session-list { flex: 1 1 0px; min-height: 0; overflow: hidden; border-bottom: 1px solid var(--pi-border-muted); }
     .section-resizer { flex: 0 0 7px; cursor: ns-resize; touch-action: none; user-select: none; position: relative; }
     .section-resizer::after { content: ""; position: absolute; left: 10px; right: 10px; top: 3px; height: 1px; background: var(--pi-border); }
     .section-resizer:hover::after, .section-resizer:active::after { background: var(--pi-accent); }
     machine-list[collapsed],
     project-list[collapsed],
-    workspace-list[collapsed],
     session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
   `;
@@ -350,5 +309,5 @@ function nextVisibleNavigationTarget(section: NavigationSection, machines: reado
 // Only a machine choice makes the machines section navigable: with a single
 // machine the switcher is a static bubble, and compact mode has no list.
 function visibleNavigationSections(machines: readonly Machine[]): NavigationSection[] {
-  return NAVIGATION_SECTION_ORDER.filter((section) => section !== "machines" || shouldShowMachinesSection(machines));
+  return NAVIGATION_SECTION_ORDER.filter((section) => (section !== "machines" || shouldShowMachinesSection(machines)) && section !== "workspaces");
 }

@@ -1,13 +1,12 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Machine, Project, SessionInfo, Workspace } from "../../api";
+import type { Machine, Project, SessionInfo } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import { machineStatusSnapshot } from "../../machineStatus.testSupport";
 import { MachineList } from "../MachineList";
 import { MachineSwitcher } from "../MachineSwitcher";
 import { ProjectList } from "../ProjectList";
-import { WorkspaceList } from "../WorkspaceList";
 import { SessionList } from "../SessionList";
 import { AppNavigationPanel, shouldShowMachinesSection } from "./AppNavigationPanel";
 
@@ -51,7 +50,7 @@ describe("header identity", () => {
 });
 
 describe("machine status wiring", () => {
-  it("gives machine sections every snapshot and project and workspace sections the selected machine's", async () => {
+  it("gives machine sections every snapshot and the project section the selected machine's", async () => {
     const local = machineStatusSnapshot({ machine: { "core:working": true } });
     const remote = machineStatusSnapshot({ machine: { "core:unread": true } });
     const panel = await mountPanel({ local, "remote-a": remote }, machine("local"));
@@ -59,7 +58,6 @@ describe("machine status wiring", () => {
     expect(section(panel, "machine-switcher", MachineSwitcher).statusSnapshots).toEqual({ local, "remote-a": remote });
     expect(section(panel, "machine-list", MachineList).statusSnapshots).toEqual({ local, "remote-a": remote });
     expect(section(panel, "project-list", ProjectList).statusSnapshot).toBe(local);
-    expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBe(local);
   });
 
   it("reads the local machine's snapshot before a machine has been selected", async () => {
@@ -71,14 +69,12 @@ describe("machine status wiring", () => {
     const panel = await mountPanel({ local }, undefined);
 
     expect(section(panel, "project-list", ProjectList).statusSnapshot).toBe(local);
-    expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBe(local);
   });
 
-  it("leaves project and workspace sections without a snapshot when the selected machine has none", async () => {
+  it("leaves the project section without a snapshot when the selected machine has none", async () => {
     const panel = await mountPanel({ "remote-a": machineStatusSnapshot() }, machine("local"));
 
     expect(section(panel, "project-list", ProjectList).statusSnapshot).toBeUndefined();
-    expect(section(panel, "workspace-list", WorkspaceList).statusSnapshot).toBeUndefined();
   });
 });
 
@@ -89,12 +85,10 @@ describe("stable list inputs", () => {
     panel.sessions = [currentSession];
     const oldSelect = vi.fn();
     panel.onSelectProject = oldSelect;
-    panel.onSelectWorkspace = oldSelect;
     panel.onSelectSession = oldSelect;
     const projects = section(panel, "project-list", ProjectList);
-    const workspaces = section(panel, "workspace-list", WorkspaceList);
     const sessions = section(panel, "session-list", SessionList);
-    const lists = [projects, workspaces, sessions];
+    const lists = [projects, sessions];
     const settle = async () => {
       await panel.updateComplete;
       await Promise.all(lists.map((list) => list.updateComplete));
@@ -109,11 +103,9 @@ describe("stable list inputs", () => {
     for (const render of renders) expect(render).not.toHaveBeenCalled();
 
     const selectProject = vi.fn();
-    const selectWorkspace = vi.fn();
     const selectSession = vi.fn();
     const focus = vi.fn();
     panel.onSelectProject = selectProject;
-    panel.onSelectWorkspace = selectWorkspace;
     panel.onSelectSession = selectSession;
     panel.onFocusNavigationTarget = focus;
     panel.machines = [machine("local")];
@@ -121,7 +113,6 @@ describe("stable list inputs", () => {
     for (const render of renders) expect(render).not.toHaveBeenCalled();
     for (const list of lists) control(list, ".action-row").click();
     expect(selectProject).toHaveBeenCalledWith(panel.projects[0]);
-    expect(selectWorkspace).toHaveBeenCalledWith(panel.workspaces[0]);
     expect(selectSession).toHaveBeenCalledWith(currentSession);
     expect(oldSelect).not.toHaveBeenCalled();
 
@@ -133,29 +124,21 @@ describe("stable list inputs", () => {
     expect(focus).toHaveBeenCalledWith("machines");
   });
 
-  it("still renders changed list data and workspace label providers", async () => {
+  it("still renders changed list data", async () => {
     const panel = await mountPanel({}, machine("local"));
     const projects = section(panel, "project-list", ProjectList);
-    const workspaces = section(panel, "workspace-list", WorkspaceList);
     const sessions = section(panel, "session-list", SessionList);
-    await Promise.all([projects.updateComplete, workspaces.updateComplete, sessions.updateComplete]);
+    await Promise.all([projects.updateComplete, sessions.updateComplete]);
     panel.projects = [project("latest-project")];
-    panel.workspaces = [workspace("latest-workspace", "latest-project")];
     panel.sessions = [session("latest-session")];
     await panel.updateComplete;
-    await Promise.all([projects.updateComplete, workspaces.updateComplete, sessions.updateComplete]);
+    await Promise.all([projects.updateComplete, sessions.updateComplete]);
     expect(projects.shadowRoot?.textContent).toContain("latest-project");
-    expect(workspaces.shadowRoot?.textContent).toContain("latest-workspace");
     expect(sessions.shadowRoot?.textContent).toContain("latest-session");
-
-    panel.workspaceLabelItems = (workspace) => [{ type: "text", text: `Label for ${workspace.id}` }];
-    await panel.updateComplete;
-    await workspaces.updateComplete;
-    expect(workspaces.shadowRoot?.textContent).toContain("Label for latest-workspace");
   });
 });
 
-function control(list: ProjectList | WorkspaceList | SessionList, selector: string): HTMLElement {
+function control(list: ProjectList | SessionList, selector: string): HTMLElement {
   const element = list.shadowRoot?.querySelector(selector);
   if (!(element instanceof HTMLElement)) throw new Error(`Missing ${selector}`);
   return element;
@@ -175,7 +158,6 @@ async function mountPanel(machineStatusSnapshots: Record<string, MachineStatusSn
   panel.machines = [machine("local"), machine("remote-a")];
   if (selectedMachine !== undefined) panel.selectedMachine = selectedMachine;
   panel.projects = [project("project-1")];
-  panel.workspaces = [workspace("ws-1", "project-1")];
   panel.machineStatusSnapshots = machineStatusSnapshots;
   document.body.append(panel);
   await panel.updateComplete;
@@ -209,8 +191,4 @@ function machine(id: string): Machine {
 
 function project(id: string): Project {
   return { id, name: id, path: `/repo/${id}`, createdAt: "2026-06-04T00:00:00.000Z" };
-}
-
-function workspace(id: string, projectId: string): Workspace {
-  return { id, projectId, path: `/repo/${id}`, label: id, isMain: true, effectiveConfig: {} };
 }
