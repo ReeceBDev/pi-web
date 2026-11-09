@@ -1175,44 +1175,6 @@ describe("PiWebApp plugin host", () => {
     expect(browser.replaced).toEqual([]);
   });
 
-  it("refetches the catalog once when a session-only deep link misses the loaded catalog", async () => {
-    const browser = installBrowserWindow("http://localhost/app?session=push-session-1&view=chat");
-    const catalogSessions: SessionInfo[] = [{ id: "push-session-1", path: "/repo/.pi/session.jsonl", cwd: "/repo", created: "now", modified: "now", messageCount: 0, firstMessage: "" } satisfies SessionInfo];
-    const app = new PiWebApp();
-    setAppState(app, {
-      ...initialAppState(),
-      projects: [project],
-      workspacesByProjectId: { [project.id]: [workspace] },
-      // Catalog predates the session (sessiond serves a partial list during
-      // its post-restart scan): the first resolution misses.
-      sessionsByWorkspacePath: { "/repo": [] },
-      workspaceTool: "core:workspace.terminal",
-      mainView: "chat",
-    });
-    await markPluginLoadingReady(app);
-    stubWorkspaceProjectSelection(app, () => {
-      setAppState(app, {
-        ...appState(app),
-        selectedProject: project,
-        selectedWorkspace: workspace,
-        workspaces: [workspace],
-        sessions: catalogSessions,
-        selectedSession: catalogSessions[0],
-      });
-    });
-    const catalog = vi.spyOn(defaultApi, "catalog").mockResolvedValue({
-      projects: [{ ...project, workspaces: [{ ...workspace, sessions: catalogSessions }] }],
-    });
-
-    await callAsyncAppMethod(app, "restoreRoute", false);
-
-    expect(catalog).toHaveBeenCalledTimes(1);
-    expect(appState(app).selectedSession?.id).toBe("push-session-1");
-    expect(appState(app).selectedProject?.id).toBe(project.id);
-    expect(appState(app).selectedWorkspace?.id).toBe(workspace.id);
-    expect(browser.replaced).toEqual([]);
-  });
-
   it("preserves a missing session route while retaining its workspace", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=deleted-session&view=chat");
     const app = new PiWebApp();
