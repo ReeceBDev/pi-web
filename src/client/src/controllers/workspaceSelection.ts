@@ -49,8 +49,9 @@ export function selectPreferredWorkspace(workspaces: Workspace[], options?: { ta
   const targetWorkspaceId = options?.targetWorkspaceId;
   if (targetWorkspaceId !== undefined && targetWorkspaceId !== "") return workspaces.find((workspace) => workspace.id === targetWorkspaceId);
 
-  const latestWorkspaceId = options?.latestWorkspaceId;
-  if (latestWorkspaceId !== undefined && latestWorkspaceId !== "") return workspaces.find((workspace) => workspace.id === latestWorkspaceId) ?? workspaces[0];
-
-  return workspaces[0];
+  // A project opens on its main checkout by default; worktree lists order the
+  // repo's main checkout first only when the project IS that checkout, so
+  // sibling-worktree projects would otherwise inherit another checkout's
+  // sessions.
+  return workspaces.find((workspace) => workspace.isMain) ?? workspaces[0];
 }

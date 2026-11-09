@@ -1320,6 +1320,11 @@ export class PiWebApp extends LitElement {
       ...current,
       ...(session !== undefined && workspace !== undefined ? { projectId: workspace.projectId, workspaceId: workspace.id } : {}),
       sessionId: session?.id,
+      // Selecting a session opens the chat immediately; the transcript streams
+      // in as the hierarchy restore catches up instead of gating the view
+      // switch behind a workspace listing that can take seconds.
+      view: "chat",
+      tool: undefined,
     };
     if (!await this.commitAndRestoreNavigation(destination, options)) return false;
     this.replaceNavigationUrl();

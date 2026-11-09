@@ -10,16 +10,16 @@ describe("selectPreferredWorkspace", () => {
     expect(selectPreferredWorkspace(workspaces, { targetWorkspaceId: "feature", latestWorkspaceId: "main" })?.id).toBe("feature");
   });
 
-  it("remembers the latest selected workspace when no explicit target is provided", () => {
-    const workspaces = [testWorkspace("main"), testWorkspace("feature")];
+  it("opens the main workspace when no explicit target is provided", () => {
+    const workspaces = [testWorkspace("feature"), testWorkspace("main")];
 
-    expect(selectPreferredWorkspace(workspaces, { latestWorkspaceId: "feature" })?.id).toBe("feature");
+    expect(selectPreferredWorkspace(workspaces, { latestWorkspaceId: "feature" })?.id).toBe("main");
   });
 
-  it("falls back to the first workspace when the remembered workspace no longer exists", () => {
-    const workspaces = [testWorkspace("main"), testWorkspace("feature")];
+  it("falls back to the first workspace when no workspace is main", () => {
+    const workspaces = [testWorkspace("feature"), testWorkspace("other")].map((workspace) => ({ ...workspace, isMain: false }));
 
-    expect(selectPreferredWorkspace(workspaces, { latestWorkspaceId: "old" })?.id).toBe("main");
+    expect(selectPreferredWorkspace(workspaces)?.id).toBe("feature");
   });
 
   it("does not fall back to remembered workspace when the explicit target is invalid", () => {
