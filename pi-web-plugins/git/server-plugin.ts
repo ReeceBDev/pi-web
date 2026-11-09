@@ -14,7 +14,7 @@ import type {
 } from "@jmfederico/pi-web/server-plugin-api";
 import { requestGitBackend } from "./git-backend.js";
 
-const UNIT_SCAN_TTL_MS = 30_000;
+const UNIT_SCAN_TTL_MS = 3_000;
 const UNIT_SCAN_CONCURRENCY = 12;
 
 const GIT_LOCAL_ENV_VARS = Object.freeze([
@@ -281,18 +281,14 @@ export function unitWorkspacesFor(entries: readonly UnitWorktreeEntry[], knownPa
 }
 
 /** Bounded-rate unit scan shared by every list() call: at most one filesystem
- * + git sweep per UNIT_SCAN_TTL_MS, result cached in the provider closure.
- * The in-flight promise is cached, so concurrent callers share one scan
- * instead of each spawning their own ~500-git-process sweep.
- * ponytail: one shared scan per TTL window; per-project scans or a watcher
- * if 30s staleness ever matters. */
+ * + git sweep per UNIT_SCAN_TTL_MS, result cached in the provider closure. */
 function createUnitScan(context: ServerPluginActivationContext, unitsRoot = join(homedir(), "units")) {
-  let cache: { at: number; value: Promise<UnitWorktreeEntry[]> } = { at: 0, value: Promise.resolve<UnitWorktreeEntry[]>([]) };
+  let cache: { at: number; value: UnitWorktreeEntry[] } = { at: 0, value: [] };
   return async (signal: AbortSignal): Promise<UnitWorktreeEntry[]> => {
     if (Date.now() - cache.at >= UNIT_SCAN_TTL_MS) {
       cache = {
         at: Date.now(),
-        value: scanUnitWorktrees(
+        value: await scanUnitWorktrees(
           { runGit: async (cwd, args) => await runGit(context, cwd, args, signal) },
           unitsRoot,
         ),
