@@ -231,7 +231,7 @@ describe("PiWebApp prompt focus and chat scroll on view switch", () => {
     expect(restoreScrollPosition).not.toHaveBeenCalled();
   });
 
-  it("sends project selection to chat on mobile and to workspaces on desktop", () => {
+  it("focuses workspaces after project selection on mobile and desktop", () => {
     const project = testProject("p1");
 
     const mobileApp = new PiWebApp();
@@ -239,7 +239,7 @@ describe("PiWebApp prompt focus and chat scroll on view switch", () => {
     const mobileSelect = stubSelectNavigationItem(mobileApp);
     navigationActionsOf(mobileApp).selectProject(project);
     expect(mobileSelect.mock.calls[0]?.[0]).toBe("projects");
-    expect(mobileSelect.mock.calls[0]?.[1]).toBe("chat");
+    expect(mobileSelect.mock.calls[0]?.[1]).toBe("workspaces");
 
     const desktopApp = new PiWebApp();
     appShellLayout(desktopApp).isMobileNavigationLayout = false;

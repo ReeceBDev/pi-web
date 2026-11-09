@@ -1861,7 +1861,7 @@ export class PiWebApp extends LitElement {
     toggleProjects: () => { this.navigationSections.toggle("projects"); },
     toggleWorkspaces: () => { this.navigationSections.toggle("workspaces"); },
     toggleSessions: () => { this.navigationSections.toggle("sessions"); },
-    selectProject: (project: Project) => this.selectNavigationItem("projects", this.appShell.isMobileNavigationLayout ? "chat" : "workspaces", () => this.selectProjectFromNavigation(project)),
+    selectProject: (project: Project) => this.selectNavigationItem("projects", "workspaces", () => this.selectProjectFromNavigation(project)),
     closeProject: (project: Project) => this.projects.closeProject(project.id),
     selectWorkspace: (workspace: Workspace) => this.selectNavigationItem("workspaces", "sessions", () => this.selectWorkspaceFromNavigation(workspace)),
     deleteWorkspace: (workspace: Workspace) => { void this.deleteWorkspace(workspace); },
