@@ -676,6 +676,12 @@ function sessionRows(sessions: SessionInfo[]): SessionRow[] {
     childrenByPath.set(parentKey, children);
   }
 
+  // rbowen (2026-11-10): most-recent first, at every tree level (archived
+  // rows already sort this way; current rows kept arrival order before).
+  const byMostRecent = (a: SessionInfo, b: SessionInfo) => Date.parse(b.modified) - Date.parse(a.modified);
+  roots.sort(byMostRecent);
+  for (const children of childrenByPath.values()) children.sort(byMostRecent);
+
   const rows: SessionRow[] = [];
   const visit = (session: SessionInfo, depth: number, stack: Set<string>) => {
     const sessionKey = normalizeSessionPath(session.path);
