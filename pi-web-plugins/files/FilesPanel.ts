@@ -99,6 +99,29 @@ export class WorkspaceFilesPanel extends LitElement {
       const reference = options?.modifiedAt === undefined ? undefined : { version: options.modifiedAt };
       return options?.download === true ? files.downloadUrl(path, reference) : files.previewUrl(path, reference);
     };
+    const viewer = html`
+      <pi-web-files-viewer
+        .contentRendering=${this.contentRendering}
+        .machineId=${context.machine.id}
+        .projectId=${context.workspace.projectId}
+        .workspaceId=${context.workspace.id}
+        .selectedPath=${scope.selectedFilePath}
+        .file=${scope.selectedFileContent}
+        .loadError=${scope.selectedFileLoadError}
+        .previewUrlBuilder=${previewUrlBuilder}
+        .modeStore=${this.modeStore}
+        .maxInlinePreviewBytes=${files.maxInlinePreviewBytes}
+      ></pi-web-files-viewer>
+    `;
+    const tree = html`
+      <section class="list tree">
+        ${scope.fileTree.length === 0 ? html`<p class="muted">No files loaded.</p>` : scope.fileTree.map((entry) => this.renderTreeEntry(context, runtime, scope, entry, 0))}
+      </section>
+    `;
+    // Preview takes over the panel while a file is selected; Back collapses it
+    // back to the directory. The selection lives in the FilesRuntime scope, so
+    // switching panels/tabs and returning keeps the preview open.
+    const previewOpen = scope.selectedFilePath !== undefined;
     return html`
       <section
         class=${this.dragActive ? "files-panel dragging" : "files-panel"}
@@ -108,7 +131,9 @@ export class WorkspaceFilesPanel extends LitElement {
         @drop=${this.handleDrop}
       >
         <section class="toolbar">
-          <strong>Files</strong>
+          ${previewOpen
+            ? html`<button title="Back to file list" @click=${() => { runtime.clearSelection(context); }}>‹ Back</button>`
+            : html`<strong>Files</strong>`}
           ${scope.treeLoading ? html`<span class="muted">loading…</span>` : null}
           ${scope.treeStale ? html`<span class="stale">stale</span>` : null}
           <div class="toolbar-actions">
@@ -119,25 +144,7 @@ export class WorkspaceFilesPanel extends LitElement {
         </section>
         ${scope.error === undefined ? null : html`<p class="files-error" role="alert">${scope.error}</p>`}
         ${this.renderUploadProgress(context, runtime, scope)}
-        <section class="split">
-          <div class="list tree">
-            ${scope.fileTree.length === 0 ? html`<p class="muted">No files loaded.</p>` : scope.fileTree.map((entry) => this.renderTreeEntry(context, runtime, scope, entry, 0))}
-          </div>
-          <div class="viewer">
-            <pi-web-files-viewer
-              .contentRendering=${this.contentRendering}
-              .machineId=${context.machine.id}
-              .projectId=${context.workspace.projectId}
-              .workspaceId=${context.workspace.id}
-              .selectedPath=${scope.selectedFilePath}
-              .file=${scope.selectedFileContent}
-              .loadError=${scope.selectedFileLoadError}
-              .previewUrlBuilder=${previewUrlBuilder}
-              .modeStore=${this.modeStore}
-              .maxInlinePreviewBytes=${files.maxInlinePreviewBytes}
-            ></pi-web-files-viewer>
-          </div>
-        </section>
+        ${previewOpen ? viewer : tree}
         <div class="drop-overlay" aria-hidden=${this.dragActive ? "false" : "true"}>
           <div>
             <strong>Drop files to upload</strong>
@@ -448,12 +455,10 @@ export class WorkspaceFilesPanel extends LitElement {
     .files-error { flex: 0 0 auto; margin: 0; border-bottom: 1px solid var(--pi-danger); color: var(--pi-danger); padding: 8px; overflow-wrap: anywhere; }
     .capability-error { box-sizing: border-box; width: min(100%, 420px); margin: auto; display: grid; gap: 8px; color: var(--pi-danger); padding: 24px; text-align: center; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
-    .split { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(160px, 34%) minmax(0, 1fr); }
-    .list { min-height: 0; overflow: auto; border-bottom: 1px solid var(--pi-border); padding: 6px; }
+    .list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 6px; }
     .row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px; width: 100%; border: 0; border-radius: 5px; background: transparent; text-align: left; padding: 4px 6px 4px calc(6px + var(--depth, 0) * 14px); }
     .row:hover, .row.selected { background: var(--pi-selection-bg); }
     .row span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .viewer { min-height: 0; overflow: auto; display: flex; flex-direction: column; }
     pi-web-files-viewer { flex: 1 1 auto; min-height: 0; }
     p { margin: 10px; }
     .drop-overlay { position: absolute; inset: 52px 10px 10px; z-index: 15; display: grid; place-items: center; border: 2px dashed var(--pi-accent); border-radius: 12px; background: color-mix(in srgb, var(--pi-bg-overlay) 90%, var(--pi-accent) 10%); color: var(--pi-text); opacity: 0; pointer-events: none; transition: opacity .12s ease; }

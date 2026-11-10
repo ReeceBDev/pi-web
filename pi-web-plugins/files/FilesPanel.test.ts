@@ -93,6 +93,25 @@ describe("Files panel component boundary", () => {
     });
   });
 
+  it("keeps the preview collapsed until a file is selected and Back returns to the directory", async () => {
+    const context = createContext({ files: createFiles({ listFiles: (path) => Promise.resolve(treeResponse(path, [{ name: "README.md", path: "README.md", type: "file" }])) }) });
+    const panel = await mountPanel(context);
+
+    await vi.waitFor(() => { expect(buttonWithText(panel.shadowRoot, "README.md")).toBeDefined(); });
+    expect(panel.shadowRoot?.querySelector("pi-web-files-viewer")).toBeNull();
+
+    buttonWithText(panel.shadowRoot, "README.md").click();
+    await vi.waitFor(() => {
+      const viewer = requiredElement(panel.shadowRoot?.querySelector<HTMLElement & { selectedPath?: string }>("pi-web-files-viewer"), "Files viewer");
+      expect(viewer.selectedPath).toBe("README.md");
+    });
+    expect(panel.shadowRoot?.querySelector(".list.tree")).toBeNull();
+
+    buttonWithText(panel.shadowRoot, "Back").click();
+    await vi.waitFor(() => { expect(panel.shadowRoot?.querySelector("pi-web-files-viewer")).toBeNull(); });
+    expect(buttonWithText(panel.shadowRoot, "README.md")).toBeDefined();
+  });
+
   it("cancels an unobserved tree request on disconnect and reloads it on reconnect", async () => {
     const signals: AbortSignal[] = [];
     let listCount = 0;
