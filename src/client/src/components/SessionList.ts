@@ -180,13 +180,22 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   override connectedCallback(): void {
     super.connectedCallback();
     document.addEventListener("click", this.onDocumentClick);
+    document.addEventListener("scroll", this.onDocumentScroll, { capture: true, passive: true });
   }
 
   override disconnectedCallback(): void {
     document.removeEventListener("click", this.onDocumentClick);
+    document.removeEventListener("scroll", this.onDocumentScroll, { capture: true });
     this.cancelColorPress();
     super.disconnectedCallback();
   }
+
+  /** rbowen (row-marker): scrolling the list is "tapping elsewhere" — drop both menus. */
+  private readonly onDocumentScroll = (): void => {
+    this.cancelColorPress();
+    this.openMenuSessionId = undefined;
+    this.openColorMenuSessionId = undefined;
+  };
 
   protected override updated(changed: PropertyValues<this>): void {
     if (changed.has("sessions")) {
@@ -702,6 +711,10 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .session-checkbox { position: absolute; top: 9px; left: calc(8px + var(--depth, 0) * 16px); z-index: 2; margin: 0; }
     /* rbowen (row-marker): far-left marking square, its palette panel, and the row tint. */
     .row-color-marker { position: absolute; top: 50%; left: 2px; z-index: 3; box-sizing: border-box; width: 14px; height: 14px; min-width: 0; padding: 0; border: 1px solid rgb(0 0 0 / 0.4); border-radius: 3px; background: #5c1616; transform: translateY(-50%); cursor: pointer; touch-action: none; user-select: none; -webkit-touch-callout: none; }
+    /* Full-bleed rows start their text at 10px; reserve the marker column so the square never overlaps the label. */
+    .action-row .action-main { padding-left: calc(22px + var(--depth, 0) * 16px); }
+    .action-main.selecting { padding-left: calc(46px + var(--depth, 0) * 16px); }
+    .session-checkbox { left: calc(24px + var(--depth, 0) * 16px); }
     .color-menu-panel { position: fixed; z-index: 40; display: flex; gap: 4px; padding: 6px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 6px 18px rgb(0 0 0 / 0.4); }
     .color-swatch { box-sizing: border-box; width: 26px; height: 26px; min-width: 0; padding: 0; border: 1px solid rgb(255 255 255 / 0.35); border-radius: 5px; cursor: pointer; }
     /* !important beats the hover/selected/unread background rules below. */

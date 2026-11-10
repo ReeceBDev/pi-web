@@ -69,6 +69,27 @@ describe("row color marker (rbowen row-marker)", () => {
     expect(list.shadowRoot?.querySelector(".color-menu-panel")).toBeNull();
   });
 
+  it("scrolling anywhere closes both the palette and the pending hold", async () => {
+    vi.useFakeTimers();
+    const list = await mount([session("s1")]);
+    const marker = markerFor(list, "s1");
+
+    marker.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    document.dispatchEvent(new Event("scroll"));
+    vi.advanceTimersByTime(1000);
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".color-menu-panel")).toBeNull();
+
+    marker.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    vi.advanceTimersByTime(500);
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".color-menu-panel")).not.toBeNull();
+
+    document.dispatchEvent(new Event("scroll"));
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".color-menu-panel")).toBeNull();
+  });
+
   it("restores marks from localStorage on construction", async () => {
     localStorage.setItem("pi-web.sessionRowColors", JSON.stringify({ s1: "#1e4d2b" }));
     const list = await mount([session("s1")]);
