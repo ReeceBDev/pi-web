@@ -530,6 +530,7 @@ describe("PiWebApp plugin host", () => {
 
     expect(sessionAtCommit).toBe(previousSession.id);
     expect(browser.url.searchParams.get("session")).toBe(nextSession.id);
+    expect(browser.url.searchParams.get("tool")).toBe("core:workspace.terminal");
     expect(browser.url.searchParams.get("core.workspace.terminal--terminal")).toBe("terminal-1");
     expect(appState(app).selectedSession?.id).toBe(nextSession.id);
   });

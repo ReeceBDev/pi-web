@@ -1360,9 +1360,10 @@ export class PiWebApp extends LitElement {
       sessionId: session?.id,
       // Selecting a session opens the chat immediately; the transcript streams
       // in as the hierarchy restore catches up instead of gating the view
-      // switch behind a workspace listing that can take seconds.
+      // switch behind a workspace listing that can take seconds. The workspace
+      // tool is kept from `...current` so the panel stays on the tab the user
+      // had open (e.g. Workspace Tasks) instead of resetting to the first tab.
       view: "chat",
-      tool: undefined,
     };
     if (!await this.commitAndRestoreNavigation(destination, options)) return false;
     this.replaceNavigationUrl();
