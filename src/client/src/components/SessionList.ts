@@ -21,6 +21,67 @@ import { listStyles, scrollBoundaryShadow } from "./shared";
 const ORPHAN_PARENT_LABEL = "parent unavailable";
 const ORPHAN_PARENT_TITLE = "Parent session is not available in this workspace";
 
+/**
+ * rbowen (row-marker): per-session importance marking. Tap the marker square for
+ * dark red, hold it 0.5s for the full palette; tap again to clear. Client-side
+ * only (localStorage), so marks are per-device and survive reloads.
+ */
+const ROW_COLORS_STORAGE_KEY = "pi-web.sessionRowColors";
+export { ROW_COLORS_STORAGE_KEY };
+const ROW_MARKER_PRESS_MS = 500;
+const ROW_MARKER_DEFAULT_BG = "#5c1616";
+interface RowMarkerColor { label: string; bg: string }
+const ROW_MARKER_COLORS: readonly RowMarkerColor[] = [
+  { label: "Dark red", bg: "#5c1616" },
+  { label: "Blood red", bg: "#9e1b1b" },
+  { label: "Dark green", bg: "#1e4d2b" },
+  { label: "Sage green", bg: "#7d9b76" },
+  { label: "Teal", bg: "#0f5257" },
+  { label: "Mustard", bg: "#b3892f" },
+  { label: "Grey beige", bg: "#b5ad8a" },
+];
+
+function loadRowColors(): Record<string, string> {
+  return rowColorsFromRaw(localStorage.getItem(ROW_COLORS_STORAGE_KEY));
+}
+
+/** Parse and sanitize persisted marks; malformed or non-string entries are dropped. */
+export function rowColorsFromRaw(raw: string | null | undefined): Record<string, string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw ?? "{}");
+  } catch {
+    return {};
+  }
+  if (typeof parsed !== "object" || parsed === null) return {};
+  const colors: Record<string, string> = {};
+  for (const [id, color] of Object.entries(parsed)) {
+    if (typeof color === "string") colors[id] = color;
+  }
+  return colors;
+}
+
+/** Pick black or white row text so every swatch keeps its label readable. */
+function rowMarkerFg(bg: string): string {
+  const value = Number.parseInt(bg.slice(1), 16);
+  const luminance = (((value >> 16) & 255) * 299 + ((value >> 8) & 255) * 587 + (value & 255) * 114) / 1000;
+  return luminance >= 150 ? "#1c1c1c" : "#f2f2f2";
+}
+
+function rowMarkerStyle(markerColor: string | undefined): string {
+  return markerColor === undefined ? "" : `; --row-marker-bg:${markerColor}; --row-marker-fg:${rowMarkerFg(markerColor)}`;
+}
+
+/** Fixed palette panel anchored above the marker square (user asked for above). */
+function colorMenuPanelStyle(target: EventTarget | null): string {
+  if (typeof HTMLElement === "undefined" || typeof window === "undefined" || !(target instanceof HTMLElement)) return "";
+  const rect = target.getBoundingClientRect();
+  const width = 224;
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+  const top = Math.max(8, rect.top - 40);
+  return `left:${String(Math.round(left))}px; top:${String(Math.round(top))}px; width:${String(width)}px;`;
+}
+
 function sessionLabel(session: SessionInfo): string {
   if (session.name !== undefined && session.name !== "") return session.name;
   return session.firstMessage !== "" ? session.firstMessage : shortSessionId(session.id);
@@ -77,6 +138,10 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   @state() private archivedExpanded = false;
   @state() private selectionScopes: ReadonlySet<SessionSelectionScope> = new Set();
   @state() private selectedSessionIds: ReadonlySet<string> = new Set();
+  @state() private rowColors: Record<string, string> = loadRowColors();
+  @state() private openColorMenuSessionId: string | undefined;
+  private colorMenuStyle = "";
+  private colorPressTimer: number | undefined;
 
   // Sessions are replaced on refresh; transient UI state must not rebuild the tree.
   private treeCache?: {
@@ -109,6 +174,7 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   private readonly onDocumentClick = (event: MouseEvent) => {
     if (event.composedPath().includes(this)) return;
     this.openMenuSessionId = undefined;
+    this.openColorMenuSessionId = undefined;
   };
 
   override connectedCallback(): void {
@@ -118,12 +184,14 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
 
   override disconnectedCallback(): void {
     document.removeEventListener("click", this.onDocumentClick);
+    this.cancelColorPress();
     super.disconnectedCallback();
   }
 
   protected override updated(changed: PropertyValues<this>): void {
     if (changed.has("sessions")) {
       if (this.openMenuSessionId !== undefined && !this.sessions.some((session) => session.id === this.openMenuSessionId)) this.openMenuSessionId = undefined;
+      if (this.openColorMenuSessionId !== undefined && !this.sessions.some((session) => session.id === this.openColorMenuSessionId)) this.openColorMenuSessionId = undefined;
       if (!this.sessions.some((session) => session.archived === true)) this.archivedExpanded = false;
       this.pruneSelectedSessionIds();
     }
@@ -321,15 +389,17 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     const unread = sessionRowUnread(session, this.unreadSessionIds);
     const canArchive = isArchivableSessionInfo(session, status);
     const canDeleteTransient = isTransientNewSessionInfo(session, status);
+    const markerColor = this.rowColorFor(session.id);
     return html`
       <div
-        class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""}"
-        style=${`--depth:${String(cappedDepth)}`}
+        class="action-row ${this.selected?.id === session.id ? "selected" : ""} ${bulkSelected ? "bulk-selected" : ""} ${session.archived === true ? "archived" : ""} ${selectionActive ? "selecting" : ""} ${unread ? "unread" : ""} ${markerColor !== undefined ? "marker-colored" : ""}"
+        style=${`--depth:${String(cappedDepth)}${rowMarkerStyle(markerColor)}`}
         tabindex="0"
         title=${session.path}
         @click=${(event: MouseEvent) => { activateSelectableRow(event, () => { this.activateSessionRow(session, scope); }); }}
         @keydown=${(event: KeyboardEvent) => { this.handleSessionKeydown(event, session, scope); }}
       >
+        ${this.renderColorMarker(session)}
         <div class="action-main ${selectionActive ? "selecting" : ""}">
           ${showsCheckbox ? html`<input class="session-checkbox" type="checkbox" aria-label=${`Select ${sessionLabel(session)}`} .checked=${bulkSelected} @click=${(event: MouseEvent) => { event.stopPropagation(); }} @change=${() => { this.toggleSelected(session.id); }}>` : null}
           <span class="action-name-line"><span class="action-name" dir="auto">${this.renderRowMarker(row)}${sessionLabel(session)}</span>${this.renderRowBadges(row)}</span><small>${this.renderSessionMetaPrefix(session, status, activity)}${String(session.messageCount)} messages</small>
@@ -386,6 +456,84 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
   private renderRowBadges(row: SessionRow) {
     if (row.depth <= 2) return null;
     return html`<span class="row-badges"><span class="badge">depth ${row.depth}</span></span>`;
+  }
+
+  /**
+   * rbowen (row-marker): the far-left square. Quick tap toggles dark red (or
+   * clears an existing mark); a 0.5s hold opens the palette panel above it.
+   */
+  private renderColorMarker(session: SessionInfo) {
+    const marked = this.rowColorFor(session.id) !== undefined;
+    return html`
+      <button
+        class="row-color-marker"
+        title=${marked ? "Clear task mark (hold for colors)" : "Mark task dark red (hold for colors)"}
+        aria-label=${`Mark ${sessionLabel(session)}`}
+        aria-pressed=${String(marked)}
+        @pointerdown=${(event: PointerEvent) => { this.startColorPress(session, event.currentTarget); }}
+        @pointerup=${() => { this.endColorPress(session); }}
+        @pointercancel=${() => { this.cancelColorPress(); }}
+        @pointerleave=${() => { this.cancelColorPress(); }}
+        @contextmenu=${(event: Event) => { event.preventDefault(); }}
+        @keydown=${(event: KeyboardEvent) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          this.setRowColor(session.id, this.rowColorFor(session.id) === undefined ? ROW_MARKER_DEFAULT_BG : undefined);
+        }}
+        @click=${(event: MouseEvent) => { event.stopPropagation(); }}
+      ></button>
+      ${this.openColorMenuSessionId === session.id ? html`
+        <div class="color-menu-panel" style=${this.colorMenuStyle} @click=${(event: MouseEvent) => { event.stopPropagation(); }}>
+          ${ROW_MARKER_COLORS.map((color) => html`
+            <button
+              class="color-swatch"
+              style=${`background:${color.bg}`}
+              title=${color.label}
+              aria-label=${color.label}
+              @click=${() => { this.setRowColor(session.id, color.bg); this.openColorMenuSessionId = undefined; }}
+            ></button>
+          `)}
+        </div>
+      ` : null}
+    `;
+  }
+
+  /** The session's applied marker background, if any. Also a test seam. */
+  rowColorFor(sessionId: string): string | undefined {
+    return this.rowColors[sessionId];
+  }
+
+  private startColorPress(session: SessionInfo, target: EventTarget | null): void {
+    this.cancelColorPress();
+    this.colorPressTimer = window.setTimeout(() => {
+      this.colorPressTimer = undefined;
+      this.colorMenuStyle = colorMenuPanelStyle(target);
+      this.openColorMenuSessionId = session.id;
+    }, ROW_MARKER_PRESS_MS);
+  }
+
+  private endColorPress(session: SessionInfo): void {
+    // A completed hold already opened the palette; only a quick tap toggles.
+    if (this.colorPressTimer === undefined) return;
+    this.cancelColorPress();
+    this.setRowColor(session.id, this.rowColorFor(session.id) === undefined ? ROW_MARKER_DEFAULT_BG : undefined);
+  }
+
+  private cancelColorPress(): void {
+    if (this.colorPressTimer === undefined) return;
+    window.clearTimeout(this.colorPressTimer);
+    this.colorPressTimer = undefined;
+  }
+
+  private setRowColor(sessionId: string, color: string | undefined): void {
+    const next = Object.fromEntries(Object.entries(this.rowColors).filter(([id]) => id !== sessionId));
+    if (color !== undefined) next[sessionId] = color;
+    this.rowColors = next;
+    try {
+      localStorage.setItem(ROW_COLORS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Storage blocked or full: the mark still applies for this page view.
+    }
   }
 
   private handleSessionKeydown(event: KeyboardEvent, session: SessionInfo, scope: SessionSelectionScope): void {
@@ -552,6 +700,12 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .pending-session-row.starting-session .activity-indicator { flex: 0 0 auto; margin: 0; }
     .action-main.selecting { padding-left: calc(32px + var(--depth, 0) * 16px); }
     .session-checkbox { position: absolute; top: 9px; left: calc(8px + var(--depth, 0) * 16px); z-index: 2; margin: 0; }
+    /* rbowen (row-marker): far-left marking square, its palette panel, and the row tint. */
+    .row-color-marker { position: absolute; top: 50%; left: 2px; z-index: 3; box-sizing: border-box; width: 14px; height: 14px; min-width: 0; padding: 0; border: 1px solid rgb(0 0 0 / 0.4); border-radius: 3px; background: #5c1616; transform: translateY(-50%); cursor: pointer; touch-action: none; user-select: none; -webkit-touch-callout: none; }
+    .color-menu-panel { position: fixed; z-index: 40; display: flex; gap: 4px; padding: 6px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 6px 18px rgb(0 0 0 / 0.4); }
+    .color-swatch { box-sizing: border-box; width: 26px; height: 26px; min-width: 0; padding: 0; border: 1px solid rgb(255 255 255 / 0.35); border-radius: 5px; cursor: pointer; }
+    /* !important beats the hover/selected/unread background rules below. */
+    .action-row.marker-colored .action-main { background: var(--row-marker-bg) !important; color: var(--row-marker-fg) !important; }
   `];
 }
 
