@@ -96,6 +96,16 @@ describe("row color marker (rbowen row-marker)", () => {
     expect(rowColor(list, "s1")).toBe("#1e4d2b");
     expect(list.shadowRoot?.querySelector(".action-row.marker-colored")).not.toBeNull();
   });
+
+  it("selected row keeps the selection colour, not the marker tint (rbowen)", async () => {
+    localStorage.setItem("pi-web.sessionRowColors", JSON.stringify({ s1: "#1e4d2b" }));
+    const list = await mount([session("s1")]);
+    list.selected = session("s1");
+    await list.updateComplete;
+    expect(list.shadowRoot?.querySelector(".action-row.marker-colored.selected")).not.toBeNull();
+    const css = [...(list.shadowRoot?.adoptedStyleSheets ?? [])].flatMap((sheet) => Array.from(sheet.cssRules, (rule) => rule.cssText)).join("\n");
+    expect(css).toMatch(/marker-colored:not\(\.selected\)/);
+  });
 });
 
 async function mount(sessions: SessionInfo[]): Promise<SessionList> {
