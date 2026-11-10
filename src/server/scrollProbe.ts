@@ -25,8 +25,12 @@ const PROBE_JS = `
   ev("boot", { ua: navigator.userAgent, href: location.href });
 
   var scroller = null;
+  var lastScan = 0;
   function findScroller() {
     if (scroller && scroller.isConnected && scroller.scrollHeight - scroller.clientHeight > 100) return scroller;
+    var now = Date.now();
+    if (now - lastScan < 5000) return null; // ponytail: backoff — a full-DOM rescan every 200ms lagged a Galaxy A70 badly
+    lastScan = now;
     var best = null, bestH = 0;
     document.querySelectorAll("*").forEach(function (el) {
       var oy = getComputedStyle(el).overflowY;
@@ -34,8 +38,8 @@ const PROBE_JS = `
         best = el; bestH = el.scrollHeight;
       }
     });
-    scroller = best;
-    return best;
+    scroller = best || document.scrollingElement || document.documentElement;
+    return scroller;
   }
 
   setInterval(function () {
