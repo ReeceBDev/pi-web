@@ -198,6 +198,20 @@ describe("sessionRowsForCurrentTree", () => {
       { id: "child", depth: 0, hasMissingParent: true },
     ]);
   });
+
+  it("orders roots and siblings by most recent modified first (rbowen 2026-11-10)", () => {
+    const old = session("old", { modified: "2026-06-01T00:00:00.000Z" });
+    const fresh = session("fresh", { modified: "2026-06-03T00:00:00.000Z" });
+    const oldChild = session("old-child", { modified: "2026-06-01T00:00:00.000Z", parentSessionPath: old.path });
+    const freshChild = session("fresh-child", { modified: "2026-06-04T00:00:00.000Z", parentSessionPath: old.path });
+
+    expect(rowSummaries(sessionRowsForCurrentTree([old, fresh, oldChild, freshChild]))).toEqual([
+      { id: "fresh", depth: 0, hasMissingParent: false },
+      { id: "old", depth: 0, hasMissingParent: false },
+      { id: "fresh-child", depth: 1, hasMissingParent: false },
+      { id: "old-child", depth: 1, hasMissingParent: false },
+    ]);
+  });
 });
 
 it("orders archived rows by activity immediately after archiving while preserving parent-child nesting", async () => {
