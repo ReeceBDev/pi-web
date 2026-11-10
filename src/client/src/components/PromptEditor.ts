@@ -19,7 +19,8 @@ import { createMobilePromptEnterMedia, shouldUsePromptEnterShiftShortcut } from 
 import { composerSendShortcut, matchesComposerSend } from "../composerShortcuts";
 import type { ShortcutPreferenceConfig } from "../keyboardShortcuts";
 import { promptEditorStyles, type CompletionItem } from "./shared";
-import { renderAttachIcon, renderSendIcon, renderQueueIcon, renderSteerIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
+import { renderAttachIcon, renderMicIcon, renderSendIcon, renderQueueIcon, renderSteerIcon, renderStopIcon, renderThinkingGauge } from "./promptEditorIcons";
+import { startDictation, type DictationController, type DictationEvents } from "../speech/dictation";
 import { thinkingGauge, thinkingLevelLabel } from "../../../shared/thinkingLevels";
 import "./AutocompleteMenu";
 
@@ -64,6 +65,16 @@ export class PromptEditor extends LitElement {
   @state() private attachmentDelivery: PromptAttachmentDelivery = loadAttachmentDelivery();
   @state() private attachmentError: string | undefined = undefined;
   private attachmentSeq = 0;
+  /** Voice dictation state: idle → recording (streaming) → finishing (final transcription). */
+  @state() private voice: "idle" | "recording" | "finishing" = "idle";
+  @state() private voiceError: string | undefined = undefined;
+  private dictationController: DictationController | undefined;
+  /** Editor text before dictation started; cancel restores exactly this region. */
+  private voiceBaseText = "";
+  /** Characters at the end of the draft that belong to the dictation transcript. */
+  private voiceChars = 0;
+  /** Test seam: inject a fake dictation controller factory. */
+  @property({ attribute: false }) createDictation: (events: DictationEvents) => Promise<DictationController> = startDictation;
   private requestVersion = 0;
   private editor: EditorView | undefined;
   private readonly editableCompartment = new Compartment();
@@ -112,6 +123,11 @@ export class PromptEditor extends LitElement {
   override disconnectedCallback(): void {
     this.editor?.destroy();
     this.editor = undefined;
+    if (this.dictationController !== undefined) {
+      this.dictationController.cancel();
+      this.dictationController = undefined;
+      this.voice = "idle";
+    }
     super.disconnectedCallback();
   }
 
@@ -125,14 +141,24 @@ export class PromptEditor extends LitElement {
         <div class="editor-wrap">
           <div class=${`markdown-editor${this.disabled ? " markdown-editor-disabled" : ""}`} aria-label="Message pi" aria-disabled=${this.disabled ? "true" : "false"}></div>
           <input class="attachment-input" type="file" multiple hidden @change=${(event: Event) => { void this.handleFileInput(event); }} />
-          <button class="editor-attach icon-button" ?disabled=${busy} title="Attach files" aria-label="Attach files" @click=${() => { this.attachmentInput?.click(); }}>${renderAttachIcon()}</button>
+          ${this.voice === "idle" ? html`
+            <button class="icon-button editor-mic" ?disabled=${busy} title="Start voice dictation" aria-label="Start voice dictation" @click=${() => { void this.handleMicClick(); }}>${renderMicIcon()}</button>
+          ` : this.voice === "recording" ? html`
+            <button class="icon-button editor-mic speech-send" ?disabled=${busy} title="Send dictated text" aria-label="Send dictated text" @click=${() => { void this.handleVoiceSend(); }}>${renderSendIcon()}</button>
+            <button class="icon-button editor-cancel" ?disabled=${busy} title="Cancel dictation" aria-label="Cancel dictation" @click=${() => { this.handleVoiceCancel(); }}>${renderStopIcon()}</button>
+          ` : html`
+            <button class="icon-button editor-mic" disabled title="Transcribing…" aria-label="Transcribing dictation">${renderMicIcon()}</button>
+          `}
           ${shellMode ? html`<div class="mode-hint">Shell command${shellInputMode.excludeFromContext ? " · excluded from context" : ""}</div>` : null}
           ${this.isCompacting && !shellMode ? html`<div class="mode-hint">Compacting history · message will be queued</div>` : null}
+          ${this.voice === "recording" && this.voiceError === undefined ? html`<div class="voice-hint voice-hint-listening" aria-live="polite">Listening…</div>` : null}
+          ${this.voiceError !== undefined ? html`<div class="voice-hint voice-hint-error" aria-live="polite">${this.voiceError}</div>` : null}
           ${this.renderAttachments()}
           <autocomplete-menu .items=${this.completions} .selectedIndex=${this.selectedIndex} .onPick=${(item: CompletionItem) => { this.pick(item); }}></autocomplete-menu>
         </div>
         <div class="actions">
           ${this.renderCompactStatus()}
+          <button class="icon-button editor-attach" ?disabled=${busy} title="Attach files" aria-label="Attach files" @click=${() => { this.attachmentInput?.click(); }}>${renderAttachIcon()}</button>
           <button class="icon-button send-button" ?disabled=${busy} title=${queuesInput ? "Queue until the current activity finishes" : "Send message"} aria-label=${queuesInput ? "Queue message" : "Send message"} @click=${() => { this.send("followUp"); }}>${queuesInput ? renderQueueIcon() : renderSendIcon()}</button>
           ${this.canSteer && !this.isCompacting ? html`<button class="icon-button steer-button" ?disabled=${busy} title="Steer the current response before the next model call" aria-label="Steer current response" @click=${() => { this.send("steer"); }}>${renderSteerIcon()}</button>` : null}
           <button class="icon-button stop-button" ?disabled=${this.disabled || !this.canStop} title=${this.canStop ? "Stop current work and clear queued messages" : "Nothing running"} aria-label="Stop current work" @click=${() => this.onStop?.()}>${renderStopIcon()}</button>
@@ -496,6 +522,12 @@ export class PromptEditor extends LitElement {
   }
 
   private send(streamingBehavior?: "steer" | "followUp") {
+    if (this.voice === "recording") {
+      // Dictation owns the send while recording: finish transcription first,
+      // then send. Covers the mic button, the main send button, and Enter.
+      void this.handleVoiceSend();
+      return;
+    }
     if (this.disabled || this.sending) return;
     const text = this.draft.trim();
     const pending = this.attachments;
@@ -512,6 +544,73 @@ export class PromptEditor extends LitElement {
     // for folder mode, orchestrates the upload + reference rewrite), so this is
     // fire-and-forget here.
     void this.onSend?.(text, behavior, attachments, attachments === undefined ? undefined : delivery, folder);
+  }
+
+  private async handleMicClick() {
+    this.voiceError = undefined;
+    const editor = this.editor;
+    if (editor === undefined) return;
+    this.voiceBaseText = editor.state.doc.toString();
+    this.voiceChars = 0;
+    try {
+      this.dictationController = await this.createDictation({
+        onPartial: (text) => { this.insertVoiceText(text); },
+        onError: (message) => { this.voiceError = message; },
+      });
+    } catch (error) {
+      this.voiceError = error instanceof Error ? error.message : "Could not start dictation.";
+      return;
+    }
+    this.voice = "recording";
+  }
+
+  private async handleVoiceSend() {
+    if (this.voice !== "recording" || this.dictationController === undefined) return;
+    this.voice = "finishing";
+    let finalText: string;
+    try {
+      finalText = await this.dictationController.finish();
+    } catch (error) {
+      this.voiceError = error instanceof Error ? error.message : "Transcription failed.";
+      this.voice = "idle";
+      this.dictationController = undefined;
+      return;
+    }
+    this.insertVoiceText(finalText);
+    this.voice = "idle";
+    this.dictationController = undefined;
+    this.send("followUp");
+  }
+
+  private handleVoiceCancel() {
+    this.dictationController?.cancel();
+    this.dictationController = undefined;
+    this.removeVoiceText();
+    this.voice = "idle";
+  }
+
+  /** Replace the dictated region at the end of the draft with new transcript text. */
+  private insertVoiceText(text: string) {
+    const editor = this.editor;
+    if (editor === undefined) return;
+    const current = editor.state.doc.toString();
+    const base = current.slice(0, Math.max(0, current.length - this.voiceChars));
+    const insert = text === "" ? "" : `${base === "" ? "" : " "}${text}`;
+    const next = `${base}${insert}`;
+    this.voiceChars = insert.length;
+    editor.dispatch({ changes: { from: 0, to: current.length, insert: next }, selection: EditorSelection.cursor(next.length) });
+  }
+
+  /** Remove the dictated region, restoring the pre-dictation draft. */
+  private removeVoiceText() {
+    const editor = this.editor;
+    if (editor === undefined) return;
+    const current = editor.state.doc.toString();
+    const base = current.slice(0, Math.max(0, current.length - this.voiceChars));
+    this.voiceChars = 0;
+    if (base !== current) {
+      editor.dispatch({ changes: { from: base.length, to: current.length, insert: "" }, selection: EditorSelection.cursor(base.length) });
+    }
   }
 
   private resetComposer() {

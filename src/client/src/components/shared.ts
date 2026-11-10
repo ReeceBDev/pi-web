@@ -554,6 +554,17 @@ export const promptEditorStyles = css`
   .select-thinking .prompt-thinking-gauge .gauge-bar-active { opacity: 1; }
   .editor-attach { position: absolute; right: 8px; bottom: 8px; z-index: 2; width: 30px; height: 30px; }
   .editor-attach .prompt-action-icon { width: 16px; height: 16px; }
+  .actions .editor-attach { position: static; width: 36px; height: 36px; }
+  .actions .editor-attach .prompt-action-icon { width: 18px; height: 18px; }
+  .editor-mic { position: absolute; right: 8px; bottom: 8px; z-index: 2; width: 30px; height: 30px; }
+  .editor-mic .prompt-action-icon { width: 16px; height: 16px; }
+  .editor-mic.speech-send:not(:disabled) { color: var(--pi-success); }
+  .editor-cancel { position: absolute; right: 44px; bottom: 8px; z-index: 2; width: 30px; height: 30px; }
+  .editor-cancel .prompt-action-icon { width: 16px; height: 16px; }
+  .editor-cancel:not(:disabled) { color: var(--pi-danger); }
+  .voice-hint { position: absolute; left: 8px; bottom: 8px; z-index: 2; max-width: calc(100% - 100px); border: 1px solid var(--pi-border); border-radius: 999px; padding: 2px 8px; font-size: 12px; pointer-events: none; }
+  .voice-hint-listening { border-color: var(--pi-success-border, var(--pi-border)); background: var(--pi-success-bg, var(--pi-surface)); color: var(--pi-success); }
+  .voice-hint-error { border-color: var(--pi-danger); background: var(--pi-surface); color: var(--pi-danger); }
   textarea, .markdown-editor .cm-editor { box-sizing: border-box; width: 100%; min-height: 54px; max-height: 220px; resize: none; overflow: hidden; border-radius: 8px; border: 1px solid var(--pi-border); background: var(--pi-bg); color: var(--pi-text); font: var(--pi-control-font-size, 16px)/1.4 var(--pi-control-font-family, system-ui, sans-serif); }
   textarea { overflow-y: auto; padding: 8px; }
   .markdown-editor .cm-scroller { max-height: 220px; overflow-y: auto; font-family: var(--pi-control-font-family, system-ui, sans-serif); line-height: 1.4; }

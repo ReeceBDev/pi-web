@@ -28,6 +28,7 @@ import { createPiWebStatusCache, type PiWebStatusCache } from "./piWebStatusCach
 import { detectPiWebInstallation, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
 import { createDeploymentFlavorResolver } from "./deploymentIdentity.js";
 import { registerDeploymentIdentityAssetRoutes } from "./deploymentIdentityRoutes.js";
+import { registerSpeechRoutes } from "./speech/speechRoutes.js";
 import type { PiWebDeploymentFlavor } from "./deploymentIdentity.js";
 import {
   ActiveAgentProfileAccessError,
@@ -298,6 +299,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerProjectTrustRoutes(app, projects, workspaces, projectTrustDeps);
   registerProjectTrustRoutes(app, projects, workspaces, projectTrustDeps, "/api/machines/local");
   registerWorkspaceDeletionRoutes(app, sessionDaemon);
+  registerSpeechRoutes(app, { config: configService });
   registerWorkspaceDeletionRoutes(app, sessionDaemon, "/api/machines/local");
 
   registerMachineProxyRoutes(app, machines);

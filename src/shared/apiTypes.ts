@@ -172,6 +172,8 @@ export interface PiWebConfigValues {
   attachments?: PiWebAttachmentsConfig;
   /** Maximum accepted HTTP request body size in bytes (uploads/attachments). */
   maxUploadBytes?: number;
+  /** Local voice dictation (speech-to-text) on this machine's web/API process. */
+  speech?: PiWebSpeechConfig;
   /** When true, LLMs can start new sessions via the spawn_session tool. */
   spawnSessions?: boolean;
   /**
@@ -335,6 +337,18 @@ export interface PiPackageMutationResponse extends PiPackagesResponse {
   source?: string;
   scope?: PiPackageScope;
   removed?: boolean;
+}
+
+/** Configuration for local voice dictation. Absent or incomplete disables the feature. */
+export interface PiWebSpeechConfig {
+  /** Python interpreter with `onnx-asr` installed (usually a venv binary path). */
+  python?: string;
+  /** Directory holding the Parakeet ONNX model files. */
+  modelDir?: string;
+  /** Model kind passed to onnx-asr; defaults to "nemo-parakeet-tdt-0.6b-v2". */
+  model?: string;
+  /** Quantization passed to onnx-asr, e.g. "int8"; defaults to none. */
+  quantization?: string;
 }
 
 export interface PiWebConfigEnvOverrides {
