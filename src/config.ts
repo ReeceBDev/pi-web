@@ -265,6 +265,7 @@ function piWebConfigRecord(config: PiWebConfig): Record<string, unknown> {
     ...(config.askUser !== undefined ? { askUser: config.askUser } : {}),
     ...(config.environmentFacts !== undefined ? { environmentFacts: config.environmentFacts } : {}),
     ...(config.agent !== undefined ? { agent: config.agent } : {}),
+    ...(config.speech !== undefined ? { speech: config.speech } : {}),
   };
 }
 
@@ -286,6 +287,22 @@ function parsePiWebConfig(value: Record<string, unknown>, path: string): PiWebCo
     ...(value["environmentFacts"] !== undefined ? { environmentFacts: parseBooleanKey(value["environmentFacts"], "environmentFacts", path) } : {}),
     ...(value["extensionDialogsTimeoutMs"] !== undefined ? { extensionDialogsTimeoutMs: parseExtensionDialogsTimeoutMs(value["extensionDialogsTimeoutMs"], path) } : {}),
     ...(value["agent"] !== undefined ? { agent: parseAgentConfig(value["agent"], path) } : {}),
+    ...(value["speech"] !== undefined ? { speech: parseSpeechConfig(value["speech"], path) } : {}),
+  };
+}
+
+function parseSpeechConfig(value: unknown, path: string): NonNullable<PiWebConfig["speech"]> {
+  if (!isRecord(value)) throw new Error("PI WEB config speech must be an object");
+  const nonEmpty = (key: string): string => {
+    const v = value[key];
+    if (typeof v !== "string" || v === "") throw new Error(`PI WEB config speech.${key} must be a non-empty string: ${path}`);
+    return v;
+  };
+  return {
+    python: nonEmpty("python"),
+    modelDir: nonEmpty("modelDir"),
+    ...(value["model"] === undefined ? {} : { model: nonEmpty("model") }),
+    ...(value["quantization"] === undefined ? {} : { quantization: nonEmpty("quantization") }),
   };
 }
 

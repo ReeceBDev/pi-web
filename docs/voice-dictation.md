@@ -11,7 +11,7 @@ prior draft.
 Run `scripts/setup-speech.sh` once. It creates a Python venv, downloads the
 Parakeet TDT 0.6B v2 int8 ONNX model (~700 MB), verifies the stack, and prints
 the config snippet. Then add to the PI WEB config (`config.json`; by default
-`~/.pi-web/config.json`) and restart the web/API process:
+`~/.config/pi-web/config.json`) and restart the web/API process:
 
 ```json
 "speech": {

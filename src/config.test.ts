@@ -41,6 +41,13 @@ describe("PI WEB config persistence", () => {
     expect(loadPiWebConfig(testOptions())).toEqual(saved);
   });
 
+  it("persists speech dictation config through save and load", () => {
+    const speech = { python: "/opt/speech/venv/bin/python", modelDir: "/opt/speech/model", quantization: "int8" };
+    savePiWebConfig({ speech }, testOptions());
+    expect(loadPiWebConfig(testOptions()).config.speech).toEqual(speech);
+    expect(() => savePiWebConfig({ speech: { python: "", modelDir: "/m" } }, testOptions())).toThrow("PI WEB config speech.python must be a non-empty string");
+  });
+
   it("preserves unrelated config keys while replacing managed keys", async () => {
     await writeFile(configPath, `${JSON.stringify({ host: "old", port: 8504, allowedHosts: true, plugins: { info: { enabled: false } }, pathAccess: { allowedPaths: ["/old"] }, uploads: { defaultFolder: "old" }, attachments: { defaultFolder: "old-attachments" }, serverPlugins: { safeStart: "none" }, future: { enabled: true } }, null, 2)}\n`, "utf8");
 

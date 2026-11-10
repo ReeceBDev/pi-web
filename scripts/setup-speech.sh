@@ -44,7 +44,7 @@ PYEOF
 cat <<EOF
 
 Setup complete. Add this to the PI WEB config (the config.json that PI_WEB_CONFIG
-points at; by default ~/.pi-web/config.json), then restart the web/API process:
+points at; by default ~/.config/pi-web/config.json), then restart the web/API process:
 
   "speech": {
     "python": "$VENV/bin/python",
