@@ -39,7 +39,7 @@ describe("client static caching", () => {
 
       expect(shell.statusCode).toBe(200);
       expect(shell.headers["content-type"]).toContain("text/html");
-      expect(shell.body).toBe("<pi-web-app></pi-web-app>");
+      expect(shell.body).toContain("<pi-web-app>");
       expect(shell.headers["cache-control"]).toBe("public, max-age=0");
     } finally {
       await app.close();

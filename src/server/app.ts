@@ -25,6 +25,7 @@ import { PiWebPluginManifestRuntimeError, PiWebPluginService } from "./piWebPlug
 import { createActiveProfilePiPackageService, type PiPackageService } from "./piPackageService.js";
 import { registerPiPackageRoutes } from "./piPackageRoutes.js";
 import { createPiWebStatusCache, createTtlCache, type PiWebStatusCache } from "./piWebStatusCache.js";
+import { registerScrollProbe } from "./scrollProbe.js";
 import { detectPiWebInstallation, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
 import { createDeploymentFlavorResolver } from "./deploymentIdentity.js";
 import { registerDeploymentIdentityAssetRoutes } from "./deploymentIdentityRoutes.js";
@@ -60,6 +61,7 @@ export interface AppDependencies {
   piWebStatusCache?: PiWebStatusCache;
   config?: PiWebConfigService;
   clientDist?: string | false;
+  scrollProbeLogFile?: string;
   /** Overrides deployment-flavor detection (dev/stable asset identity) in tests. */
   deploymentFlavor?: () => Promise<PiWebDeploymentFlavor>;
   logger?: FastifyServerOptions["logger"];
@@ -339,6 +341,11 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
       (error) => { app.log.warn({ err: error }, "failed to detect PI WEB deployment flavor"); },
     );
     registerDeploymentIdentityAssetRoutes(app, { clientDist, flavor: deploymentFlavor });
+    // TEMPORARY scroll diagnosis (2026-11-10): injects the scroll/touch probe
+    // into the app shell and collects it at /__probe while the Android
+    // launcher scroll bug is open. ponytail: remove when the scroll ticket
+    // closes.
+    registerScrollProbe(app, deps.scrollProbeLogFile);
     app.setNotFoundHandler((_request, reply) => reply.sendFile("index.html"));
   }
 
