@@ -1033,7 +1033,13 @@ export class ChatView extends LitElement {
   }
 
   private onTouchEnd() {
-    this.userScrollUntil = Date.now() + 400;
+    // Cover the fling inertia tail: momentum runs ~1s+ after the finger lifts,
+    // and the delta-follow pin (updated() -> scrollToBottom) would resume
+    // writing scrollTop mid-fling, killing the fling and yanking the view
+    // back to the bottom (the box-launcher "swipe sticks/rubber-bands"
+    // symptom). During inertia no onScroll re-arms the guard — programmatic
+    // writes abort the fling, so there is nothing to extend it with.
+    this.userScrollUntil = Date.now() + 1200;
     this.touchStartY = undefined;
   }
 
