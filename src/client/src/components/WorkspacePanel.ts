@@ -4,7 +4,7 @@ import type { Workspace } from "../api";
 import type { QualifiedContributionId, QualifiedWorkspacePanelContribution, WorkspacePanelContext } from "../plugins/types";
 import { renderNavigationMenuIcon } from "./tabIcons";
 import { workspacePanelStyles } from "./shared";
-import { pinnedNavigationTabs } from "../navigationPreferences";
+import { visibleNavigationTabs } from "../navigationPreferences";
 
 export interface WorkspacePanelEmptyState {
   title: string;
@@ -22,7 +22,7 @@ export class WorkspacePanel extends LitElement {
   @property() tool: QualifiedContributionId | undefined;
   @property({ attribute: false }) panels: QualifiedWorkspacePanelContribution[] = [];
   @property({ type: Boolean }) hideToolTabs = false;
-  @property({ attribute: false }) pinnedIds: string[] = [];
+  @property({ attribute: false }) hiddenIds: string[] = [];
   @property({ attribute: false }) onShowNavigation?: () => void;
   @property({ attribute: false }) onSelectTool: (tool: QualifiedContributionId) => void = () => undefined;
   @query(".workspace-header-strip") private workspaceHeaderStrip?: HTMLElement | null;
@@ -67,14 +67,14 @@ export class WorkspacePanel extends LitElement {
     // An unresolved route may leave a valid remembered tool, but its content is not displayed.
     const selectedPanel = this.error !== "" ? undefined
       : this.tool === undefined ? visiblePanels[0] : visiblePanels.find((panel) => panel.id === this.tool);
-    const pinnedPanels = pinnedNavigationTabs(visiblePanels, this.pinnedIds);
+    const barPanels = visibleNavigationTabs(visiblePanels, this.hiddenIds);
     return html`
       ${this.hideToolTabs ? null : html`
         <header>
           <div class=${this.workspaceHeaderFrameClass()}>
             <div class="workspace-header-strip" @scroll=${this.onWorkspaceHeaderScroll}>
               <div class="tabs">
-                ${pinnedPanels.map((panel) => {
+                ${barPanels.map((panel) => {
                   const selected = selectedPanel?.id === panel.id;
                   const badge = panel.badge?.(context);
                   const ariaLabel = this.panelTabAriaLabel(panel, badge);
@@ -87,7 +87,7 @@ export class WorkspacePanel extends LitElement {
               </div>
             </div>
           </div>
-          ${this.renderNavigationButton(selectedPanel !== undefined && !pinnedPanels.some((panel) => panel.id === selectedPanel.id))}
+          ${this.renderNavigationButton(selectedPanel !== undefined && !barPanels.some((panel) => panel.id === selectedPanel.id))}
         </header>
       `}
       ${this.error !== "" ? this.renderEmptyState({ title: this.error }) : selectedPanel === undefined ? this.renderEmptyState({

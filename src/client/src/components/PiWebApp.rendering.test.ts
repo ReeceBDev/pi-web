@@ -88,7 +88,6 @@ describe("application rendering boundaries", () => {
     expect(dialog.selectedTab).toBe("render-test:panel");
     expect(dialog.shadowRoot?.querySelector('.destination-button[aria-pressed="true"]')?.textContent).toBe("Test");
     expect(tabIds()).not.toContain("Chat");
-    expect(dialog.pinUniverse).toEqual(["navigation", "chat", "render-test:panel"]);
     for (const [next, expected] of [
       [1180, ["chat", "render-test:panel"]],
       [761, ["chat", "render-test:panel"]],
@@ -101,39 +100,39 @@ describe("application rendering boundaries", () => {
       expect(dialog.selectedTab).toBe(next > 1180 ? "render-test:panel" : "chat");
       const labels: Record<string, string> = { navigation: "Sessions", chat: "Chat", "render-test:panel": "Test" };
       expect(tabIds()).toEqual([...expected.map((id) => labels[id]), "Navigation"]);
-      expect(loadNavigationPreferences().pinnedIds).toEqual([]);
+      expect(loadNavigationPreferences().hiddenIds).toEqual([]);
     }
     const search = dialog.shadowRoot?.querySelector("input");
     if (search == null) throw new Error("Expected search");
     search.value = "Test";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await settle(app);
-    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Test"]')?.click();
+    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Hide Test"]')?.click();
     await settle(app);
-    expect(loadNavigationPreferences().pinnedIds).toEqual(["navigation", "chat"]);
+    expect(loadNavigationPreferences().hiddenIds).toEqual(["render-test:panel"]);
     await resize(760);
-    expect(loadNavigationPreferences().pinnedIds).toEqual(["navigation", "chat"]);
+    expect(loadNavigationPreferences().hiddenIds).toEqual(["render-test:panel"]);
     expect(tabIds()).toEqual(["Sessions", "Chat", "Navigation"]);
     search.value = "";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await settle(app);
-    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Chat"]')?.click();
+    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Hide Chat"]')?.click();
     await settle(app);
     await resize(1181);
-    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Test"]')?.click();
+    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Show Test"]')?.click();
     await settle(app);
-    expect(loadNavigationPreferences().pinnedIds).toEqual(["navigation", "render-test:panel"]);
+    expect(loadNavigationPreferences().hiddenIds).toEqual(["chat"]);
     await resize(760);
     expect(tabIds()).toEqual(["Sessions", "Test", "Navigation"]);
   });
   it.each([
-    { mobile: true, desktop: false, view: "chat", pins: ["navigation"], selected: true },
-    { mobile: true, desktop: false, view: "chat", pins: ["chat"], selected: false },
-    { mobile: true, desktop: false, view: "chat", pins: [], selected: false },
-    { mobile: false, desktop: false, view: "navigation", pins: ["chat"], selected: false },
-    { mobile: false, desktop: true, view: "chat", pins: ["navigation"], selected: false },
-  ] as const)("highlights only available hidden mobile destinations: %j", async ({ mobile, desktop, view, pins, selected }) => {
-    saveNavigationPreferences({ pinnedIds: [...pins], mobileCollapsed: false });
+    { mobile: true, desktop: false, view: "chat", hidden: ["chat"], selected: true },
+    { mobile: true, desktop: false, view: "chat", hidden: ["navigation"], selected: false },
+    { mobile: true, desktop: false, view: "chat", hidden: [], selected: false },
+    { mobile: false, desktop: false, view: "navigation", hidden: ["chat"], selected: false },
+    { mobile: false, desktop: true, view: "chat", hidden: ["chat"], selected: false },
+  ] as const)("highlights only available hidden mobile destinations: %j", async ({ mobile, desktop, view, hidden, selected }) => {
+    saveNavigationPreferences({ hiddenIds: [...hidden], mobileCollapsed: false });
     const app = await mountApp({ mainView: view });
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -151,7 +150,7 @@ describe("application rendering boundaries", () => {
     { desktop: false, collapsed: false },
     { desktop: false, collapsed: true },
   ])("does not select or highlight a fallback for unavailable destinations: %j", async ({ desktop, collapsed }) => {
-    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: collapsed });
+    saveNavigationPreferences({ hiddenIds: ["render-test:panel"], mobileCollapsed: collapsed });
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView: "workspace", workspaceTool: "render-test:panel" }, () => html`<p>Remembered content</p>`);
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -181,7 +180,7 @@ describe("application rendering boundaries", () => {
   });
 
   it.each(["chat", "workspace"] as const)("collapsed mobile navigation selects the visible destination, not the remembered tool: %s", async (mainView) => {
-    saveNavigationPreferences({ pinnedIds: ["chat"], mobileCollapsed: true });
+    saveNavigationPreferences({ hiddenIds: ["render-test:panel"], mobileCollapsed: true });
     const app = await mountApp({ selectedWorkspace: workspace, workspaces: [workspace], mainView, workspaceTool: "render-test:panel" }, () => html`<p>Tool content</p>`);
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -253,7 +252,7 @@ describe("application rendering boundaries", () => {
     await settle(app);
     const dialog = app.shadowRoot?.querySelector("navigation-dialog");
     if (!(dialog instanceof NavigationDialog)) throw new Error("Expected Navigation dialog");
-    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Test"]')?.click();
+    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Hide Test"]')?.click();
     await settle(app);
     expect(open?.classList.contains("selected")).toBe(true);
     expect(tabStrip?.shadowRoot?.querySelector('button[aria-label="Navigation"]')?.classList.contains("selected")).toBe(true);
@@ -262,9 +261,9 @@ describe("application rendering boundaries", () => {
     expect(workspacePanel?.shadowRoot?.querySelector('button[title="Test"]')).toBeNull();
     expect(app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelector('button[title="Test"]')).toBeNull();
     expect(workspacePanel?.shadowRoot?.querySelector(".panel-content")?.textContent).toContain("Selected tool content");
-    expect(loadNavigationPreferences().pinnedIds).toEqual(["navigation", "chat"]);
-    expect(dialog.shadowRoot?.querySelector('button[aria-label="Pin Test"]')).not.toBeNull();
-    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Test"]')?.click();
+    expect(loadNavigationPreferences().hiddenIds).toEqual(["render-test:panel"]);
+    expect(dialog.shadowRoot?.querySelector('button[aria-label="Show Test"]')).not.toBeNull();
+    dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Show Test"]')?.click();
     await settle(app);
     expect(open?.classList.contains("selected")).toBe(false);
     expect(tabStrip?.shadowRoot?.querySelector('button[aria-label="Navigation"]')?.classList.contains("selected")).toBe(false);
@@ -277,7 +276,7 @@ describe("application rendering boundaries", () => {
   });
 
   it("collapses only the mobile tab bar, keeping breadcrumbs and separate Navigation and Actions controls", async () => {
-    saveNavigationPreferences({ pinnedIds: [], mobileCollapsed: true });
+    saveNavigationPreferences({ hiddenIds: [], mobileCollapsed: true });
     const app = await mountApp({});
     const shell: unknown = Reflect.get(app, "appShell");
     if (!(shell instanceof AppShellController)) throw new Error("Expected shell controller");
@@ -311,7 +310,7 @@ describe("application rendering boundaries", () => {
     await settle(app);
     const reopenedDialog = app.shadowRoot?.querySelector("navigation-dialog");
     expect(reopenedDialog).not.toBeNull();
-    expect(loadNavigationPreferences()).toEqual({ pinnedIds: [], mobileCollapsed: false });
+    expect(loadNavigationPreferences()).toEqual({ hiddenIds: [], mobileCollapsed: false });
 
     // A resize must invalidate the guarded tab surface even with collapse enabled.
     reopenedDialog?.shadowRoot?.querySelector<HTMLButtonElement>(".mobile-navigation button:last-child")?.click();

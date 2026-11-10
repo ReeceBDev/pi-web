@@ -2,16 +2,14 @@ import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { paletteStyles } from "../paletteStyles";
 import { scrollWhenSelected } from "../scrollWhenSelected";
-import { isNavigationPinned, toggleNavigationPin, type NavigationPreferences } from "../../navigationPreferences";
+import { toggleNavigationTabHidden, type NavigationPreferences } from "../../navigationPreferences";
 import type { AppMobileMainTab } from "./AppMobileMainTabs";
 import "../ModalSurface";
 
 @customElement("navigation-dialog")
 export class NavigationDialog extends LitElement {
   @property({ attribute: false }) tabs: AppMobileMainTab[] = [];
-  // Layout/search visibility must not narrow implicit-all pin edits.
-  @property({ attribute: false }) pinUniverse?: readonly string[];
-  @property({ attribute: false }) preferences: NavigationPreferences = { pinnedIds: [], mobileCollapsed: false };
+  @property({ attribute: false }) preferences: NavigationPreferences = { hiddenIds: [], mobileCollapsed: false };
   @property({ attribute: false }) selectedTab?: AppMobileMainTab["id"];
   @property({ attribute: false }) onSelect?: (id: AppMobileMainTab["id"]) => void;
   @property({ attribute: false }) onPreferencesChange?: (preferences: NavigationPreferences) => void;
@@ -52,24 +50,27 @@ export class NavigationDialog extends LitElement {
         </header>
         <span id="navigation-selection" class="sr-only" role="status" aria-live="polite" aria-atomic="true">${tabs.length === 0 ? "No destinations found." : `${tabs[this.selectedIndex]?.label ?? ""}, ${String(this.selectedIndex + 1)} of ${String(tabs.length)}`}</span>
         <h2>Navigation</h2>
-        <p>Pin destinations to the tab bars. Removing the last pin shows all tabs.</p>
+        <p>Filled pin shows a destination on the tab bars; empty pin hides it. Hidden destinations stay reachable here.</p>
         <nav class="options" aria-label="Destinations">
           ${tabs.length === 0 ? html`<div class="empty">No destinations found.</div>` : nothing}
-          ${tabs.map((tab, index) => html`
+          ${tabs.map((tab, index) => {
+            const isHidden = this.preferences.hiddenIds.includes(tab.id);
+            return html`
             <div class="destination">
               <button class=${`destination-button ${index === this.selectedIndex ? "selected" : ""}`} aria-current=${tab.id === this.selectedTab ? "page" : nothing} aria-pressed=${String(tab.id === this.selectedTab)} ${scrollWhenSelected(index === this.selectedIndex, tab.id)} @focus=${() => { this.selectedIndex = index; }} @click=${() => { this.select(tab); }}>${tab.label}</button>
-              <button type="button" class="pin-button" aria-label=${`Pin ${tab.label}`} title=${isNavigationPinned(tab.id, this.preferences.pinnedIds) ? `Unpin ${tab.label}` : `Pin ${tab.label}`} aria-pressed=${String(isNavigationPinned(tab.id, this.preferences.pinnedIds))} @click=${() => {
-                this.onPreferencesChange?.({ ...this.preferences, pinnedIds: toggleNavigationPin(tab.id, this.preferences.pinnedIds, this.pinUniverse ?? this.tabs.map((item) => item.id)) });
+              <button type="button" class="pin-button" aria-label=${`${isHidden ? "Show" : "Hide"} ${tab.label}`} title=${isHidden ? `Show ${tab.label}` : `Hide ${tab.label}`} aria-pressed=${String(!isHidden)} @click=${() => {
+                this.onPreferencesChange?.({ ...this.preferences, hiddenIds: toggleNavigationTabHidden(tab.id, this.preferences.hiddenIds) });
               }}>
-                <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill=${isNavigationPinned(tab.id, this.preferences.pinnedIds) ? "currentColor" : "none"} stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill=${isHidden ? "none" : "currentColor"} stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M8 3h8l-1 7 4 4v2H5v-2l4-4-1-7Z"></path><path d="M12 16v6"></path>
                 </svg>
               </button>
             </div>
-          `)}
+          `;
+          })}
         </nav>
         <footer>
-          <button @click=${() => { this.onPreferencesChange?.({ ...this.preferences, pinnedIds: [] }); }}>Show all tabs</button>
+          <button @click=${() => { this.onPreferencesChange?.({ ...this.preferences, hiddenIds: [] }); }}>Show all tabs</button>
           <div class="mobile-navigation" role="group" aria-label="Mobile navigation">
             <span>Mobile navigation</span>
             <div class="toggle-options">

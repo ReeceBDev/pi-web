@@ -51,7 +51,7 @@ import { PanelResizeController, type PanelResizeConstraints, type ResizablePanel
 import { isCreatingSessionId, parseMainView, readRoute, resolveAppRoute, routeMatchesWorkspaceIdentity, writeRoute, type AppRoute, type ParsedAppRoute, type WorkspaceRouteIdentity } from "../route";
 import { readSettingsSection, writeSettingsSection, type SettingsSection } from "../settingsRoute";
 import { applyActiveShortcutPreferences } from "../shortcutPreferences";
-import { loadNavigationPreferences, saveNavigationPreferences, pinnedNavigationTabs, type NavigationPreferences } from "../navigationPreferences";
+import { loadNavigationPreferences, saveNavigationPreferences, visibleNavigationTabs, type NavigationPreferences } from "../navigationPreferences";
 import "./appShell/NavigationDialog";
 import { canDeleteWorkspace, isWorkspaceDeletionPending, isWorkspaceDeletionRunPending, latestWorkspaceDeletionRuns, targetWorkspaceIdForRun, workspaceDeletionRunFilter, workspaceRemovalConfirmation } from "../workspaceDeletion";
 import "./MachineList";
@@ -1688,7 +1688,7 @@ export class PiWebApp extends LitElement {
         .error=${this.workspaceContentError()}
         .tool=${this.effectiveWorkspaceTool(panels)}
         .panels=${panels}
-        .pinnedIds=${this.navigationPreferences.pinnedIds}
+        .hiddenIds=${this.navigationPreferences.hiddenIds}
         .onShowNavigation=${this.showNavigation}
         .onSelectTool=${(tool: QualifiedContributionId) => { this.openWorkspaceTool(tool); }}
       ></workspace-panel>
@@ -3472,12 +3472,12 @@ export class PiWebApp extends LitElement {
     if (this.appShell.isMobileNavigationLayout && this.navigationPreferences.mobileCollapsed) return null;
     const panels = this.visibleWorkspacePanels();
     const availableTabs = this.availableNavigationTabs(panels);
-    const pinnedTabs = pinnedNavigationTabs(availableTabs, this.navigationPreferences.pinnedIds);
+    const visibleTabs = visibleNavigationTabs(availableTabs, this.navigationPreferences.hiddenIds);
     const selectedTab = this.selectedNavigationTab(panels);
     return html`
       <app-mobile-main-tabs
-        .tabs=${pinnedTabs}
-        .hiddenActiveDestination=${availableTabs.some((tab) => tab.id === selectedTab) && !pinnedTabs.some((tab) => tab.id === selectedTab)}
+        .tabs=${visibleTabs}
+        .hiddenActiveDestination=${availableTabs.some((tab) => tab.id === selectedTab) && !visibleTabs.some((tab) => tab.id === selectedTab)}
         .onShowNavigation=${this.showNavigation}
         .selectedTab=${selectedTab}
         .onSelect=${this.selectNavigationTab}
@@ -3588,7 +3588,6 @@ export class PiWebApp extends LitElement {
         ${state.authDialog !== undefined ? html`<auth-dialog .state=${state.authDialog} .onChooseMethod=${(authType: "oauth" | "api_key") => { void this.auth.chooseLoginMethod(authType); }} .onSelectProvider=${(providerId: string, authType: "oauth" | "api_key") => { void this.auth.selectLoginProvider(providerId, authType); }} .onLogoutProvider=${(providerId: string) => { void this.auth.logoutProvider(providerId); }} .onOAuthInput=${(value: string) => { this.auth.updateOAuthInput(value); }} .onOAuthRespond=${(value?: string) => { void this.auth.respondOAuth(value); }} .onOAuthCancel=${() => { void this.auth.cancelOAuth(); }} .onCancel=${() => { this.auth.closeDialog(); }}></auth-dialog>` : null}
         ${this.navigationDialogOpen ? html`<navigation-dialog
           .tabs=${this.availableNavigationTabs()}
-          .pinUniverse=${this.mobileMainTabs().map((tab) => tab.id)}
           .selectedTab=${this.selectedNavigationTab()}
           .preferences=${this.navigationPreferences}
           .onPreferencesChange=${this.changeNavigationPreferences}

@@ -1,34 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { isNavigationPinned, loadNavigationPreferences, pinnedNavigationTabs, saveNavigationPreferences, toggleNavigationPin } from "./navigationPreferences";
+import { loadNavigationPreferences, saveNavigationPreferences, toggleNavigationTabHidden, visibleNavigationTabs } from "./navigationPreferences";
 
 const tabs = [{ id: "navigation" }, { id: "chat" }, { id: "plugin:files" }];
 
 describe("navigation preferences", () => {
-  it("shows all tabs for empty pins and explicit all pins, in destination order", () => {
-    expect(pinnedNavigationTabs(tabs, [])).toEqual(tabs);
-    expect(pinnedNavigationTabs(tabs, ["plugin:files", "chat", "navigation"])).toEqual(tabs);
-    expect(pinnedNavigationTabs(tabs, ["plugin:files"])).toEqual([tabs[2]]);
+  it("shows every tab unless it is explicitly hidden, in destination order", () => {
+    expect(visibleNavigationTabs(tabs, [])).toEqual(tabs);
+    expect(visibleNavigationTabs(tabs, ["plugin:files"])).toEqual([tabs[0], tabs[1]]);
+    // A tab a user has never hidden (e.g. a newly added plugin tab) stays visible.
+    expect(visibleNavigationTabs(tabs, ["navigation", "chat"])).toEqual([tabs[2]]);
   });
 
-  it("materializes implicit all pins on unpin and treats removing the last pin as all", () => {
-    expect(toggleNavigationPin("chat", [], tabs.map((tab) => tab.id))).toEqual(["navigation", "plugin:files"]);
-    const pins = toggleNavigationPin("chat", ["chat"], []);
-    expect(pins).toEqual([]);
-    expect(isNavigationPinned("plugin:files", pins)).toBe(true);
+  it("toggles hidden membership both ways", () => {
+    expect(toggleNavigationTabHidden("chat", [])).toEqual(["chat"]);
+    expect(toggleNavigationTabHidden("chat", ["navigation", "chat"])).toEqual(["navigation"]);
+    expect(toggleNavigationTabHidden("chat", ["chat"])).toEqual([]);
   });
 
-  it("retains unavailable plugins through filtering and pin management", () => {
-    const pins = ["missing:tool"];
-    expect(pinnedNavigationTabs(tabs, pins)).toEqual([]);
-    expect(toggleNavigationPin("chat", pins, ["chat"])).toEqual(["missing:tool", "chat"]);
-    expect(pinnedNavigationTabs([{ id: "missing:tool" }], pins)).toEqual([{ id: "missing:tool" }]);
-    expect(pins).toEqual(["missing:tool"]);
+  it("keeps hidden ids for tabs that are currently unavailable", () => {
+    const hidden = ["missing:tool"];
+    expect(visibleNavigationTabs(tabs, hidden)).toEqual(tabs);
+    expect(visibleNavigationTabs([{ id: "missing:tool" }], hidden)).toEqual([]);
+    expect(toggleNavigationTabHidden("missing:tool", hidden)).toEqual([]);
+    expect(hidden).toEqual(["missing:tool"]);
   });
 
-  it("round-trips pins independently from mobile collapse", () => {
+  it("round-trips hidden ids independently from mobile collapse", () => {
     const values = new Map<string, string>();
     const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
-    const preferences = { pinnedIds: ["missing:tool"], mobileCollapsed: true };
+    const preferences = { hiddenIds: ["missing:tool"], mobileCollapsed: true };
     saveNavigationPreferences(preferences, storage);
     expect(loadNavigationPreferences(storage)).toEqual(preferences);
     saveNavigationPreferences({ ...preferences, mobileCollapsed: false }, storage);
@@ -37,10 +37,10 @@ describe("navigation preferences", () => {
 
   it("defaults safely for malformed or unavailable storage and validates stored values", () => {
     const storage = (raw: string) => ({ getItem: () => raw });
-    expect(loadNavigationPreferences(storage("{"))).toEqual({ pinnedIds: [], mobileCollapsed: false });
-    expect(loadNavigationPreferences(storage('{"pinnedIds":["chat",5,"chat",""],"mobileCollapsed":"true"}'))).toEqual({ pinnedIds: ["chat"], mobileCollapsed: false });
+    expect(loadNavigationPreferences(storage("{"))).toEqual({ hiddenIds: [], mobileCollapsed: false });
+    expect(loadNavigationPreferences(storage('{"hiddenIds":["chat",5,"chat",""],"mobileCollapsed":"true"}'))).toEqual({ hiddenIds: ["chat"], mobileCollapsed: false });
     const blocked = { getItem: () => { throw new Error("Blocked"); }, setItem: () => { throw new Error("Blocked"); } };
-    expect(loadNavigationPreferences(blocked)).toEqual({ pinnedIds: [], mobileCollapsed: false });
-    expect(() => { saveNavigationPreferences({ pinnedIds: [], mobileCollapsed: true }, blocked); }).not.toThrow();
+    expect(loadNavigationPreferences(blocked)).toEqual({ hiddenIds: [], mobileCollapsed: false });
+    expect(() => { saveNavigationPreferences({ hiddenIds: [], mobileCollapsed: true }, blocked); }).not.toThrow();
   });
 });

@@ -109,17 +109,17 @@ it("filters destinations and navigates results from search without changing pins
   expect(selected()).toBe("Chat");
 });
 
-it("offers unpinned destinations and closes after navigating without modifying pins", async () => {
+it("offers hidden destinations and closes after navigating without modifying preferences", async () => {
   const dialog = new NavigationDialog();
   dialog.tabs = [{ id: "chat", label: "Chat" }, { id: "tools:files", label: "Files" }];
-  dialog.preferences = { pinnedIds: ["chat", "missing:tool"], mobileCollapsed: true };
+  dialog.preferences = { hiddenIds: ["tools:files"], mobileCollapsed: true };
   dialog.selectedTab = "tools:files";
   dialog.onSelect = vi.fn();
   dialog.onClose = vi.fn();
   dialog.onPreferencesChange = vi.fn();
   document.body.append(dialog);
   await dialog.updateComplete;
-  const pin = dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Files"]');
+  const pin = dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Show Files"]');
   expect(pin?.getAttribute("aria-pressed")).toBe("false");
   expect(pin?.querySelector("svg")).not.toBeNull();
   const files = dialog.shadowRoot?.querySelector<HTMLButtonElement>('.destination > button:first-child[aria-pressed="true"]');
@@ -130,29 +130,29 @@ it("offers unpinned destinations and closes after navigating without modifying p
   expect(dialog.onPreferencesChange).not.toHaveBeenCalled();
 });
 
-it("toggles icon pins and mobile layout independently, resets tabs, and uses shared Escape handling", async () => {
+it("toggles tab visibility and mobile layout independently, resets tabs, and uses shared Escape handling", async () => {
   const dialog = new NavigationDialog();
   dialog.tabs = [{ id: "chat", label: "Chat" }, { id: "tools:files", label: "Files" }];
-  dialog.preferences = { pinnedIds: ["chat", "missing:tool"], mobileCollapsed: true };
+  dialog.preferences = { hiddenIds: ["chat"], mobileCollapsed: true };
   dialog.onPreferencesChange = (preferences) => { dialog.preferences = preferences; };
   dialog.onClose = vi.fn();
   document.body.append(dialog);
   await dialog.updateComplete;
-  dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Pin Files"]')?.click();
+  dialog.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Hide Files"]')?.click();
   await dialog.updateComplete;
-  expect(dialog.preferences).toEqual({ pinnedIds: ["chat", "missing:tool", "tools:files"], mobileCollapsed: true });
-  expect(dialog.shadowRoot?.querySelector('button[aria-label="Pin Files"]')?.getAttribute("aria-pressed")).toBe("true");
+  expect(dialog.preferences).toEqual({ hiddenIds: ["chat", "tools:files"], mobileCollapsed: true });
+  expect(dialog.shadowRoot?.querySelector('button[aria-label="Show Files"]')?.getAttribute("aria-pressed")).toBe("false");
   const modes = [...dialog.shadowRoot?.querySelectorAll<HTMLButtonElement>('.mobile-navigation button') ?? []];
   expect(modes.map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
   modes[0]?.click();
   await dialog.updateComplete;
-  expect(dialog.preferences).toEqual({ pinnedIds: ["chat", "missing:tool", "tools:files"], mobileCollapsed: false });
+  expect(dialog.preferences).toEqual({ hiddenIds: ["chat", "tools:files"], mobileCollapsed: false });
   expect(modes.map((button) => button.getAttribute("aria-pressed"))).toEqual(["true", "false"]);
   modes[1]?.click();
   await dialog.updateComplete;
   dialog.shadowRoot?.querySelector<HTMLButtonElement>("footer button")?.click();
   await dialog.updateComplete;
-  expect(dialog.preferences).toEqual({ pinnedIds: [], mobileCollapsed: true });
+  expect(dialog.preferences).toEqual({ hiddenIds: [], mobileCollapsed: true });
   expect([...dialog.shadowRoot?.querySelectorAll(".pin-button") ?? []].every((button) => button.getAttribute("aria-pressed") === "true")).toBe(true);
   expect(dialog.shadowRoot?.querySelector('input[type="checkbox"]')).toBeNull();
   const surface = dialog.shadowRoot?.querySelector<ModalSurface>("modal-surface");

@@ -1,9 +1,14 @@
 export interface NavigationPreferences {
-  pinnedIds: string[];
+  // Tabs the user explicitly hid. Tabs never named here stay visible, so
+  // plugins that add a new tab later (e.g. Workspace Tasks) are visible by
+  // default instead of falling outside a stale "show only these" list.
+  hiddenIds: string[];
   mobileCollapsed: boolean;
 }
 
-const storageKey = "pi-web:navigation-preferences";
+// v2: the old key stored materialized pin lists ("show only these"), which hid
+// every tab added after the list was written. Start clean under a new key.
+const storageKey = "pi-web:navigation-preferences-v2";
 
 function browserStorage(): Storage | undefined {
   try {
@@ -17,16 +22,16 @@ export function loadNavigationPreferences(storage: Pick<Storage, "getItem"> | un
   try {
     const value: unknown = JSON.parse(storage?.getItem(storageKey) ?? "null");
     if (typeof value === "object" && value !== null) {
-      const pins: unknown = "pinnedIds" in value ? value.pinnedIds : undefined;
+      const hidden: unknown = "hiddenIds" in value ? value.hiddenIds : undefined;
       return {
-        pinnedIds: Array.isArray(pins) ? [...new Set(pins.filter((id): id is string => typeof id === "string" && id.length > 0))] : [],
+        hiddenIds: Array.isArray(hidden) ? [...new Set(hidden.filter((id): id is string => typeof id === "string" && id.length > 0))] : [],
         mobileCollapsed: "mobileCollapsed" in value && value.mobileCollapsed === true,
       };
     }
   } catch {
     // Layout preferences are optional when storage is blocked or malformed.
   }
-  return { pinnedIds: [], mobileCollapsed: false };
+  return { hiddenIds: [], mobileCollapsed: false };
 }
 
 export function saveNavigationPreferences(preferences: NavigationPreferences, storage: Pick<Storage, "setItem"> | undefined = browserStorage()): void {
@@ -37,16 +42,10 @@ export function saveNavigationPreferences(preferences: NavigationPreferences, st
   }
 }
 
-export function isNavigationPinned(id: string, pinnedIds: readonly string[]): boolean {
-  return pinnedIds.length === 0 || pinnedIds.includes(id);
+export function visibleNavigationTabs<T extends { id: string }>(tabs: readonly T[], hiddenIds: readonly string[]): T[] {
+  return tabs.filter((tab) => !hiddenIds.includes(tab.id));
 }
 
-export function pinnedNavigationTabs<T extends { id: string }>(tabs: readonly T[], pinnedIds: readonly string[]): T[] {
-  return tabs.filter((tab) => isNavigationPinned(tab.id, pinnedIds));
-}
-
-export function toggleNavigationPin(id: string, pinnedIds: readonly string[], availableIds: readonly string[]): string[] {
-  // Materialize the implicit "all" before unpinning. Never prune unavailable plugin IDs.
-  const explicitPins = pinnedIds.length === 0 ? availableIds : pinnedIds;
-  return explicitPins.includes(id) ? explicitPins.filter((pin) => pin !== id) : [...explicitPins, id];
+export function toggleNavigationTabHidden(id: string, hiddenIds: readonly string[]): string[] {
+  return hiddenIds.includes(id) ? hiddenIds.filter((hidden) => hidden !== id) : [...hiddenIds, id];
 }
