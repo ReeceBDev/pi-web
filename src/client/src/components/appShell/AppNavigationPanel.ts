@@ -7,7 +7,6 @@ import type { NavigationSection } from "../../appShell/navigationState";
 import { NAVIGATION_SECTION_ORDER } from "../../appShell/navigationState";
 import type { KeyboardNavigableSection } from "../navigationFocus";
 import "../MachineList";
-import "../MachineSwitcher";
 import "../ProjectList";
 import "../SessionList";
 
@@ -17,8 +16,6 @@ export type NavigationFocusTarget = NavigationSection | "chat";
 export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) machines: Machine[] = [];
   @property({ attribute: false }) selectedMachine?: Machine;
-  /** PWA display mode: surfaces the single-machine identity bubble in the header. */
-  @property({ type: Boolean }) locationIndicator = false;
   @property({ attribute: false }) machineStatuses: Record<string, MachineHealth> = {};
   @property({ attribute: false }) machineStatusSnapshots: Record<string, MachineStatusSnapshot> = {};
   @property({ attribute: false }) projects: Project[] = [];
@@ -29,7 +26,6 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) sessionStatuses: Record<string, SessionStatus> = {};
   @property({ attribute: false }) sendingPrompts: Record<string, true> = {};
   @property({ attribute: false }) unreadSessionIds: ReadonlySet<string> = new Set();
-  @property({ attribute: false }) refreshControl: unknown;
   @property({ type: Boolean, reflect: true }) collapsible = false;
   @property({ type: Boolean, reflect: true }) compact = false;
   @property({ type: Boolean }) machinesCollapsed = false;
@@ -40,7 +36,6 @@ export class AppNavigationPanel extends LitElement {
   // rbowen (wstoggle): Projects/Sessions split, persisted in localStorage.
   @property({ attribute: false }) projectsHidden = false;
   @property({ attribute: false }) projectsFlex = 50;
-  @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onToggleMachines?: () => void;
   @property({ attribute: false }) onToggleProjects?: () => void;
   @property({ attribute: false }) onToggleSessions?: () => void;
@@ -72,13 +67,13 @@ export class AppNavigationPanel extends LitElement {
   @property({ attribute: false }) onCancelKeyboardNavigation?: () => void | Promise<void>;
 
   @query("machine-list") private machineList?: KeyboardNavigableSection;
-  @query("machine-switcher") private machineSwitcher?: KeyboardNavigableSection;
   @query("project-list") private projectList?: KeyboardNavigableSection;
   @query("session-list") private sessionList?: KeyboardNavigableSection;
 
   constructor() {
     super();
-    this.projectsHidden = localStorage.getItem("pi-web.projectsHidden") === "1";
+    // rbowen: projectsHidden is owned by PiWebApp (the toggle lives in the
+    // workspace/main tab bars now) and arrives as a plain property.
     const flex = Number(localStorage.getItem("pi-web.projectsFlex"));
     this.projectsFlex = flex >= 5 && flex <= 95 ? flex : 50;
   }
@@ -86,7 +81,7 @@ export class AppNavigationPanel extends LitElement {
   async focusSection(section: NavigationSection): Promise<boolean> {
     await this.updateComplete;
     switch (section) {
-      case "machines": return await this.focusNavigableSection(this.compact ? this.machineList : this.machineSwitcher);
+      case "machines": return await this.focusNavigableSection(this.machineList);
       case "projects": return await this.focusNavigableSection(this.projectList);
       case "workspaces": return false;
       case "sessions": return await this.focusNavigableSection(this.sessionList);
@@ -127,28 +122,6 @@ export class AppNavigationPanel extends LitElement {
 
   override render() {
     return html`
-      <header>
-        <div class="header-brand">
-          <strong>PI WEB</strong>
-          <small class="header-projects-label">Projects · ${this.projects.length}</small>
-        </div>
-        <machine-switcher
-          .machines=${this.machines}
-          .selected=${this.selectedMachine}
-          .locationIndicator=${this.locationIndicator}
-          .statuses=${this.machineStatuses}
-          .statusSnapshots=${this.machineStatusSnapshots}
-          .onSelect=${(machine: Machine) => this.onSelectMachine?.(machine)}
-          .onRemove=${(machine: Machine) => this.onRemoveMachine?.(machine)}
-          .onFocusNextSection=${() => { this.focusNextFrom("machines"); }}
-          .onCancelKeyboardNavigation=${() => { this.cancelKeyboardNavigation(); }}
-        ></machine-switcher>
-        <div class="header-actions">
-          ${this.refreshControl}
-          <button title=${this.projectsHidden ? "Show the Projects section" : "Hide the Projects section"} aria-pressed=${String(!this.projectsHidden)} @click=${() => { this.projectsHidden = !this.projectsHidden; localStorage.setItem("pi-web.projectsHidden", this.projectsHidden ? "1" : "0"); }}>Projects</button>
-          <button title="Show Actions" aria-label="Show Actions" @click=${() => { this.onShowActions?.(); }}>Actions</button>
-        </div>
-      </header>
       ${this.compact && shouldShowMachinesSection(this.machines) ? html`
         <machine-list
           .machines=${this.machines}
@@ -271,13 +244,6 @@ export class AppNavigationPanel extends LitElement {
   static override styles = css`
     :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
     :host([compact]) { flex: 1 1 auto; }
-    header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px; border-bottom: 1px solid var(--pi-border); }
-    header strong { flex: 0 0 auto; }
-    .header-brand { flex: 0 0 auto; display: flex; flex-direction: column; min-width: 0; }
-    .header-projects-label { color: var(--pi-muted); font-size: 11px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    machine-switcher { flex: 1 1 auto; min-width: 0; }
-    :host([compact]) header { display: none; }
-    .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
     /* Expanded sections share the panel height equally, so collapsing one
        section distributes its space to every remaining section, not just the
        session list. Collapsed sections keep only their heading height. */
@@ -288,7 +254,6 @@ export class AppNavigationPanel extends LitElement {
     machine-list[collapsed],
     project-list[collapsed],
     session-list[collapsed] { flex: 0 0 auto; min-height: auto; overflow: hidden; }
-    button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
   `;
 }
 

@@ -5,7 +5,6 @@ import type { Machine, Project, SessionInfo } from "../../api";
 import type { MachineStatusSnapshot } from "../../../../shared/machineStatus";
 import { machineStatusSnapshot } from "../../machineStatus.testSupport";
 import { MachineList } from "../MachineList";
-import { MachineSwitcher } from "../MachineSwitcher";
 import { ProjectList } from "../ProjectList";
 import { SessionList } from "../SessionList";
 import { AppNavigationPanel, shouldShowMachinesSection } from "./AppNavigationPanel";
@@ -28,24 +27,10 @@ describe("shouldShowMachinesSection", () => {
 });
 
 describe("header identity", () => {
-  it("shows the plain brand without an icon or address", async () => {
+  it("renders no header at all — brand and quick links moved to the tab bars (rbowen)", async () => {
     const panel = await mountHeaderPanel([machine("local")]);
 
-    expect(panel.shadowRoot?.querySelector("header strong")?.textContent).toBe("PI WEB");
-    expect(panel.shadowRoot?.querySelector(".brand-icon")).toBeNull();
-    expect(panel.shadowRoot?.querySelector(".brand-domain")).toBeNull();
-  });
-
-  it("keeps the machine switcher visible with a single machine", async () => {
-    const panel = await mountHeaderPanel([machine("local")]);
-
-    expect(panel.shadowRoot?.querySelector("machine-switcher")).toBeInstanceOf(MachineSwitcher);
-  });
-
-  it("forwards the location-indicator flag to the machine switcher", async () => {
-    const panel = await mountHeaderPanel([machine("local")], true);
-
-    expect(section(panel, "machine-switcher", MachineSwitcher).locationIndicator).toBe(true);
+    expect(panel.shadowRoot?.querySelector("header")).toBeNull();
   });
 });
 
@@ -55,7 +40,6 @@ describe("machine status wiring", () => {
     const remote = machineStatusSnapshot({ machine: { "core:unread": true } });
     const panel = await mountPanel({ local, "remote-a": remote }, machine("local"));
 
-    expect(section(panel, "machine-switcher", MachineSwitcher).statusSnapshots).toEqual({ local, "remote-a": remote });
     expect(section(panel, "machine-list", MachineList).statusSnapshots).toEqual({ local, "remote-a": remote });
     expect(section(panel, "project-list", ProjectList).statusSnapshot).toBe(local);
   });
@@ -97,7 +81,7 @@ describe("stable list inputs", () => {
     // Render counts are the regression contract, not a proxy for visible output.
     const renders = lists.map((list) => vi.spyOn(list, "render"));
     const panelRender = vi.spyOn(panel, "render");
-    panel.locationIndicator = true;
+    panel.projectsHidden = !panel.projectsHidden;
     await settle();
     expect(panelRender).toHaveBeenCalledOnce();
     for (const render of renders) expect(render).not.toHaveBeenCalled();
@@ -170,10 +154,9 @@ function section<T>(panel: AppNavigationPanel, selector: string, type: abstract 
   return element;
 }
 
-async function mountHeaderPanel(machines: Machine[], locationIndicator = false): Promise<AppNavigationPanel> {
+async function mountHeaderPanel(machines: Machine[]): Promise<AppNavigationPanel> {
   const panel = new AppNavigationPanel();
   panel.machines = machines;
-  panel.locationIndicator = locationIndicator;
   document.body.append(panel);
   await panel.updateComplete;
   return panel;

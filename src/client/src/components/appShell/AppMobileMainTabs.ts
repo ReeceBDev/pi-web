@@ -25,6 +25,10 @@ export class AppMobileMainTabs extends LitElement {
   @property({ type: Boolean }) hiddenActiveDestination = false;
   @property({ attribute: false }) selectedTab: AppMobileMainTabId | undefined = "chat";
   @property({ attribute: false }) onSelect?: (tab: AppMobileMainTabId) => void;
+  // rbowen: nav-panel header gone; Projects/Actions live at the end of this row.
+  @property({ type: Boolean }) projectsHidden = false;
+  @property({ attribute: false }) onToggleProjects?: () => void;
+  @property({ attribute: false }) onShowActions?: () => void;
   @query(".mobile-tabs") private mobileTabs?: HTMLElement | null;
   @state() private canScrollLeft = false;
   @state() private canScrollRight = false;
@@ -64,7 +68,18 @@ export class AppMobileMainTabs extends LitElement {
             `;
           })}
           ${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`navigation-menu-button${this.hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}
+          ${this.renderHeaderButtons()}
         </div>
+      </div>
+    `;
+  }
+
+  private renderHeaderButtons() {
+    if (this.onToggleProjects === undefined && this.onShowActions === undefined) return null;
+    return html`
+      <div class="header-actions">
+        ${this.onToggleProjects === undefined ? null : html`<button type="button" title=${this.projectsHidden ? "Show the Projects section" : "Hide the Projects section"} aria-pressed=${String(!this.projectsHidden)} @click=${this.onToggleProjects}>Projects</button>`}
+        ${this.onShowActions === undefined ? null : html`<button type="button" title="Show Actions" aria-label="Show Actions" @click=${this.onShowActions}>Actions</button>`}
       </div>
     `;
   }
@@ -162,6 +177,7 @@ export class AppMobileMainTabs extends LitElement {
     .mobile-tabs-frame::after { right: 0; background: linear-gradient(270deg, color-mix(in srgb, var(--pi-shadow-strong) 55%, transparent) 0%, transparent 100%); }
     .mobile-tabs-frame.can-scroll-left::before, .mobile-tabs-frame.can-scroll-right::after { opacity: 1; }
     .mobile-tabs { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 3px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; scrollbar-width: thin; }
+    .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
     .mobile-tabs-frame button { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
     .mobile-tabs .navigation-tab { display: none; }
     .mobile-tabs-frame button.selected { border-color: var(--pi-accent); background: var(--pi-selection-bg); }

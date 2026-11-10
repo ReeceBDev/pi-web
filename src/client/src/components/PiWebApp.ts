@@ -323,6 +323,9 @@ export class PiWebApp extends LitElement {
   @state() private sessionCleanupDialog: SessionCleanupDialogState | undefined;
   @state() private settingsSection: SettingsSection | undefined = readSettingsSection();
   @state() private shortcutConfig: PiWebShortcutConfig = {};
+  // rbowen: nav-panel header removed; the Projects toggle lives in the tab
+  // bars now, so the persisted visibility state moved up here.
+  @state() private projectsHidden = this.readProjectsHidden();
   @state() private workspaceUploadDefaultFolder = effectiveWorkspaceUploadFolder(undefined);
   @state() private workspaceAttachmentsDefaultFolder = effectiveWorkspaceAttachmentsFolder(undefined);
   private sessionWarningVisibility = initialSessionWarningVisibilityState();
@@ -1703,6 +1706,9 @@ export class PiWebApp extends LitElement {
         .hiddenIds=${this.navigationPreferences.hiddenIds}
         .onShowNavigation=${this.showNavigation}
         .onSelectTool=${(tool: QualifiedContributionId) => { this.openWorkspaceTool(tool); }}
+        .projectsHidden=${this.projectsHidden}
+        .onToggleProjects=${this.toggleProjectsHidden}
+        .onShowActions=${this.navigationActions.showActions}
       ></workspace-panel>
     `;
   }
@@ -1902,7 +1908,6 @@ export class PiWebApp extends LitElement {
       <app-navigation-panel
         .machines=${this.state.machines}
         .selectedMachine=${this.state.selectedMachine}
-        .locationIndicator=${this.appShell.isPwaDisplayMode}
         .machineStatuses=${this.state.machineStatuses}
         .machineStatusSnapshots=${this.state.machineStatusSnapshots}
         .machinesCollapsed=${this.navigationSections.isCollapsed("machines")}
@@ -1923,8 +1928,7 @@ export class PiWebApp extends LitElement {
         .compact=${this.appShell.isMobileNavigationLayout}
         .projectsCollapsed=${this.navigationSections.isCollapsed("projects")}
         .sessionsCollapsed=${this.navigationSections.isCollapsed("sessions")}
-        .refreshControl=${this.appShell.shouldShowAppRefreshInHeader() ? this.renderAppRefresh() : undefined}
-        .onShowActions=${this.navigationActions.showActions}
+        .projectsHidden=${this.projectsHidden}
         .onToggleProjects=${this.navigationActions.toggleProjects}
         .onToggleSessions=${this.navigationActions.toggleSessions}
         .onSelectProject=${this.navigationActions.selectProject}
@@ -3480,6 +3484,24 @@ export class PiWebApp extends LitElement {
     `;
   }
 
+  /** rbowen: Projects section toggle — now lives in the tab bars, not the nav header. */
+  private readonly toggleProjectsHidden = (): void => {
+    this.projectsHidden = !this.projectsHidden;
+    try {
+      window.localStorage.setItem("pi-web.projectsHidden", this.projectsHidden ? "1" : "0");
+    } catch {
+      // storage unavailable — toggle still works, just won't persist
+    }
+  };
+
+  private readProjectsHidden(): boolean {
+    try {
+      return window.localStorage.getItem("pi-web.projectsHidden") === "1";
+    } catch {
+      return false;
+    }
+  }
+
   private renderMobileMainTabs() {
     if (this.appShell.isMobileNavigationLayout && this.navigationPreferences.mobileCollapsed) return null;
     const panels = this.visibleWorkspacePanels();
@@ -3493,6 +3515,9 @@ export class PiWebApp extends LitElement {
         .onShowNavigation=${this.showNavigation}
         .selectedTab=${selectedTab}
         .onSelect=${this.selectNavigationTab}
+        .projectsHidden=${this.projectsHidden}
+        .onToggleProjects=${this.toggleProjectsHidden}
+        .onShowActions=${this.navigationActions.showActions}
       ></app-mobile-main-tabs>
     `;
   }

@@ -23,6 +23,11 @@ export class WorkspacePanel extends LitElement {
   @property({ attribute: false }) panels: QualifiedWorkspacePanelContribution[] = [];
   @property({ type: Boolean }) hideToolTabs = false;
   @property({ attribute: false }) hiddenIds: string[] = [];
+  // rbowen: the nav-panel header is gone; Projects/Actions live at the right
+  // end of this tab strip now (same height as the tabs, one row).
+  @property({ type: Boolean }) projectsHidden = false;
+  @property({ attribute: false }) onToggleProjects?: () => void;
+  @property({ attribute: false }) onShowActions?: () => void;
   @property({ attribute: false }) onShowNavigation?: () => void;
   @property({ attribute: false }) onSelectTool: (tool: QualifiedContributionId) => void = () => undefined;
   @query(".workspace-header-strip") private workspaceHeaderStrip?: HTMLElement | null;
@@ -88,6 +93,7 @@ export class WorkspacePanel extends LitElement {
             </div>
           </div>
           ${this.renderNavigationButton(selectedPanel !== undefined && !barPanels.some((panel) => panel.id === selectedPanel.id))}
+          ${this.renderHeaderButtons()}
         </header>
       `}
       ${this.error !== "" ? this.renderEmptyState({ title: this.error }) : selectedPanel === undefined ? this.renderEmptyState({
@@ -127,6 +133,16 @@ export class WorkspacePanel extends LitElement {
 
   private renderNavigationButton(hiddenActiveDestination = false) {
     return this.onShowNavigation === undefined ? null : html`<button type="button" class=${`navigation-menu-button${hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`;
+  }
+
+  private renderHeaderButtons() {
+    if (this.onToggleProjects === undefined && this.onShowActions === undefined) return null;
+    return html`
+      <div class="header-actions">
+        ${this.onToggleProjects === undefined ? null : html`<button type="button" title=${this.projectsHidden ? "Show the Projects section" : "Hide the Projects section"} aria-pressed=${String(!this.projectsHidden)} @click=${this.onToggleProjects}>Projects</button>`}
+        ${this.onShowActions === undefined ? null : html`<button type="button" title="Show Actions" aria-label="Show Actions" @click=${this.onShowActions}>Actions</button>`}
+      </div>
+    `;
   }
 
   private renderEmptyState(state: WorkspacePanelEmptyState, showNavigation = false): TemplateResult {

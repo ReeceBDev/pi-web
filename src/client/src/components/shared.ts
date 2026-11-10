@@ -205,6 +205,7 @@ export const workspacePanelStyles = css`
   :host { display: flex; flex-direction: column; min-height: 0; color: var(--pi-text); background: var(--pi-bg); font: 13px system-ui, sans-serif; container-type: inline-size; }
   header { display: flex; align-items: center; flex: 0 0 auto; min-width: 0; border-bottom: 1px solid var(--pi-border); }
   .navigation-menu-button { flex: 0 0 auto; margin: 0 8px; }
+  .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; margin: 0 8px; }
   .workspace-header-scroll-frame { flex: 1 1 auto; position: relative; min-width: 0; background: var(--pi-bg); }
   .workspace-header-scroll-frame::before, .workspace-header-scroll-frame::after { content: ""; position: absolute; top: 0; bottom: 0; z-index: 2; width: 18px; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
   .workspace-header-scroll-frame::before { left: 0; background: linear-gradient(90deg, color-mix(in srgb, var(--pi-shadow-strong) 55%, transparent) 0%, transparent 100%); }

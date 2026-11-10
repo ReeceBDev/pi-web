@@ -57,5 +57,28 @@
   <body>
     <pi-web-app></pi-web-app>
     <script type="module" src="/src/main.ts"></script>
+    <script>
+      // rbowen: mobile keyboards shrink the visual viewport without firing a
+      // resize that reflows scroll containers; without this guard a touch-drag
+      // on a non-scrollable target rubber-bands the whole app. Only blocks
+      // touches that cannot scroll anything.
+      (function () {
+        var v = window.visualViewport;
+        function scrollable(el) {
+          while (el && el !== document.body) {
+            if (el instanceof Element) {
+              var s = getComputedStyle(el);
+              if (/(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight + 1) return true;
+            }
+            el = el.parentElement || (el.getRootNode && el.getRootNode().host);
+          }
+          return false;
+        }
+        document.addEventListener('touchmove', function (e) {
+          var t = e.composedPath ? e.composedPath()[0] : e.target;
+          if (v && v.height < window.innerHeight - 10 && !scrollable(t)) e.preventDefault();
+        }, { passive: false });
+      })();
+    </script>
   </body>
 </html>

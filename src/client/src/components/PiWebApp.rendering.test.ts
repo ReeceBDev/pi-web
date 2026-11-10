@@ -74,7 +74,7 @@ describe("application rendering boundaries", () => {
     const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
     if (dialog == null) throw new Error("Expected open navigation");
     const destinations = () => dialog.tabs.map((tab) => tab.id);
-    const tabIds = () => [...app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelectorAll<HTMLButtonElement>('.mobile-tabs button') ?? []].map((button) => button.title);
+    const tabIds = () => [...app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelectorAll<HTMLButtonElement>('.mobile-tabs > button') ?? []].map((button) => button.title);
     const resize = async (next: number) => {
       const previous = new Map([...media].map(([query]) => [query, matches(query)]));
       width = next;
@@ -167,7 +167,7 @@ describe("application rendering boundaries", () => {
       const menu = surface?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
       expect(menu).not.toBeNull();
       expect(menu?.classList.contains("selected")).toBe(false);
-      expect(surface?.shadowRoot?.querySelector('button[aria-pressed="true"]')).toBeNull();
+      expect(surface?.shadowRoot?.querySelector(`${desktop ? ".tabs" : ".mobile-tabs >"} button[aria-pressed="true"]`)).toBeNull();
       menu?.click();
       await settle(app);
       const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
@@ -242,11 +242,11 @@ describe("application rendering boundaries", () => {
     const workspacePanel = app.shadowRoot?.querySelector("workspace-panel");
     const open = workspacePanel?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
     expect(open).not.toBeNull();
-    expect(workspacePanel?.shadowRoot?.querySelector("header > button:last-child")).toBe(open);
+    expect(workspacePanel?.shadowRoot?.querySelector("header > .header-actions")?.previousElementSibling).toBe(open);
     expect(open?.querySelector("svg")).not.toBeNull();
     expect(open?.classList.contains("selected")).toBe(false);
     const tabStrip = app.shadowRoot?.querySelector("app-mobile-main-tabs");
-    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > button:last-child")?.getAttribute("aria-label")).toBe("Navigation");
+    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > .header-actions button:last-child")?.getAttribute("aria-label")).toBe("Show Actions");
     expect(tabStrip?.shadowRoot?.querySelector('button[aria-label="Navigation"]')?.classList.contains("selected")).toBe(false);
     open?.click();
     await settle(app);
@@ -302,7 +302,7 @@ describe("application rendering boundaries", () => {
     const hamburger = tabStrip?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
     expect(hamburger?.querySelector("svg")).not.toBeNull();
     expect(hamburger?.classList.contains("selected")).toBe(false);
-    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > button:last-child")).toBe(hamburger);
+    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > .header-actions button:last-child")?.getAttribute("aria-label")).toBe("Show Actions");
     dialog?.shadowRoot?.querySelector<HTMLButtonElement>("header button")?.click();
     await settle(app);
     expect(deepActiveElement(document)).toBe(hamburger);

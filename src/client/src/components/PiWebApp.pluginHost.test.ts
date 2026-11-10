@@ -130,7 +130,7 @@ describe("PiWebApp plugin host", () => {
     }
     expect(appState(app).browserErrors).toEqual({});
     expect(panel.shadowRoot?.querySelector(".panel-content")).toBeNull();
-    expect(panel.shadowRoot?.querySelector(".selected, [aria-pressed=true]")).toBeNull();
+    expect(panel.shadowRoot?.querySelector(".tabs .selected, .tabs [aria-pressed=true]")).toBeNull();
     expect(browser.url.href).toBe(originalUrl);
     expect(browser.pushed).toEqual([]);
     expect(browser.replaced).toEqual([]);
@@ -249,7 +249,7 @@ describe("PiWebApp plugin host", () => {
         expect(panel.shadowRoot?.querySelector('button[aria-label="Terminal"]')?.getAttribute("aria-pressed")).toBe("true");
         expect(panel.shadowRoot?.querySelector(".panel-content")).not.toBeNull();
       } else {
-        expect(panel.shadowRoot?.querySelector(".selected, [aria-pressed=true]")).toBeNull();
+        expect(panel.shadowRoot?.querySelector(".tabs .selected, .tabs [aria-pressed=true]")).toBeNull();
         expect(panel.shadowRoot?.querySelector(".panel-content")).toBeNull();
         expect(panel.shadowRoot?.textContent).toContain(`Workspace panel unavailable: ${tool}`);
       }
