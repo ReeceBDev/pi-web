@@ -143,6 +143,20 @@ describe("buildApp project catalog route", () => {
     expect(daemon.requestedPaths).toEqual([...expectedSessionRequests, ...expectedSessionRequests]);
   });
 
+  it("serves repeat catalog requests from the cache within the TTL", async () => {
+    const addResponse = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Cached", path: projectDir, create: true } });
+    expect(addResponse.statusCode).toBe(200);
+
+    const first = await app.inject({ method: "GET", url: "/api/machines/local/projects/catalog" });
+    const sessionRequestsAfterFirst = daemon.requestedPaths.length;
+    const second = await app.inject({ method: "GET", url: "/api/machines/local/projects/catalog" });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual(first.json());
+    expect(daemon.requestedPaths.length).toBe(sessionRequestsAfterFirst);
+  });
+
   it("yields an empty session list for a workspace whose session request fails", async () => {
     const addResponse = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Broken", path: projectDir, create: true } });
     expect(addResponse.statusCode).toBe(200);

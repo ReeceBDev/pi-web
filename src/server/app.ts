@@ -24,7 +24,7 @@ import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachin
 import { PiWebPluginManifestRuntimeError, PiWebPluginService } from "./piWebPluginService.js";
 import { createActiveProfilePiPackageService, type PiPackageService } from "./piPackageService.js";
 import { registerPiPackageRoutes } from "./piPackageRoutes.js";
-import { createPiWebStatusCache, type PiWebStatusCache } from "./piWebStatusCache.js";
+import { createPiWebStatusCache, createTtlCache, type PiWebStatusCache } from "./piWebStatusCache.js";
 import { detectPiWebInstallation, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
 import { createDeploymentFlavorResolver } from "./deploymentIdentity.js";
 import { registerDeploymentIdentityAssetRoutes } from "./deploymentIdentityRoutes.js";
@@ -95,13 +95,22 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
   // One-request bulk listing: every project, its workspaces, and each
   // workspace's sessions. A workspace whose session list fails contributes an
   // empty list so one dead workspace cannot blank the whole catalog.
+  // The fan-out runs one sessiond listing per workspace and takes seconds at
+  // scale (~166 workspaces here), which timed out every fresh client boot and
+  // rendered a blank app — so the response is cached with stale-while-revalidate
+  // and a fresh catalog lags changes by up to the TTL.
+  // ponytail: no cache invalidation on project/session mutations; add one if
+  // catalog freshness outranks fast boots.
+  const catalogCache = createTtlCache(async () => {
+    const all = await projects.list();
+    return { projects: await Promise.all(all.map(async (project) => ({
+      ...project,
+      workspaces: await catalogWorkspaces(options.sessionDaemon, project, workspaces, options.config),
+    }))) };
+  }, { onError: (error) => { app.log.warn({ err: error }, "failed to refresh project catalog cache"); } });
   app.get(`${prefix}/projects/catalog`, async (_request, reply) => {
     try {
-      const all = await projects.list();
-      return { projects: await Promise.all(all.map(async (project) => ({
-        ...project,
-        workspaces: await catalogWorkspaces(options.sessionDaemon, project, workspaces, options.config),
-      }))) };
+      return await catalogCache.get();
     } catch (error) {
       return sendWorkspaceRequestError(reply, error, 404);
     }

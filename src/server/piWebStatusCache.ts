@@ -16,20 +16,26 @@ export interface PiWebStatusCacheRefreshOptions {
   force?: boolean;
 }
 
-export interface PiWebStatusCache {
-  get(): Promise<PiWebStatusResponse>;
-  refresh(options?: PiWebStatusCacheRefreshOptions): Promise<PiWebStatusResponse>;
+export interface TtlCache<T> {
+  get(): Promise<T>;
+  refresh(options?: PiWebStatusCacheRefreshOptions): Promise<T>;
   invalidate(): void;
 }
 
+export type PiWebStatusCache = TtlCache<PiWebStatusResponse>;
+
 export function createPiWebStatusCache(load: (options: PiWebStatusCacheLoadOptions) => Promise<PiWebStatusResponse>, options: PiWebStatusCacheOptions = {}): PiWebStatusCache {
+  return createTtlCache(load, options);
+}
+
+export function createTtlCache<T>(load: (options: PiWebStatusCacheLoadOptions) => Promise<T>, options: PiWebStatusCacheOptions = {}): TtlCache<T> {
   const ttlMs = options.ttlMs ?? DEFAULT_PI_WEB_STATUS_CACHE_TTL_MS;
   const now = options.now ?? Date.now;
-  let cached: { status: PiWebStatusResponse; expiresAt: number } | undefined;
-  let pending: { promise: Promise<PiWebStatusResponse>; force: boolean; sequence: number } | undefined;
+  let cached: { status: T; expiresAt: number } | undefined;
+  let pending: { promise: Promise<T>; force: boolean; sequence: number } | undefined;
   let loadSequence = 0;
 
-  const refresh = (refreshOptions: PiWebStatusCacheRefreshOptions = {}): Promise<PiWebStatusResponse> => {
+  const refresh = (refreshOptions: PiWebStatusCacheRefreshOptions = {}): Promise<T> => {
     const force = refreshOptions.force === true;
     if (pending !== undefined && (!force || pending.force)) return pending.promise;
 
@@ -48,7 +54,7 @@ export function createPiWebStatusCache(load: (options: PiWebStatusCacheLoadOptio
   };
 
   return {
-    async get(): Promise<PiWebStatusResponse> {
+    async get(): Promise<T> {
       if (cached !== undefined) {
         if (cached.expiresAt > now()) return cached.status;
         void refresh().catch((error: unknown) => { options.onError?.(error); });
