@@ -704,8 +704,9 @@ export class SessionList extends LitElement implements KeyboardNavigableSection 
     .row-color-marker { position: absolute; top: 50%; left: 2px; z-index: 3; box-sizing: border-box; width: 14px; height: 14px; min-width: 0; padding: 0; border: 1px solid rgb(0 0 0 / 0.4); border-radius: 3px; background: #5c1616; transform: translateY(-50%); cursor: pointer; touch-action: none; user-select: none; -webkit-touch-callout: none; }
     .color-menu-panel { position: fixed; z-index: 40; display: flex; gap: 4px; padding: 6px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 6px 18px rgb(0 0 0 / 0.4); }
     .color-swatch { box-sizing: border-box; width: 26px; height: 26px; min-width: 0; padding: 0; border: 1px solid rgb(255 255 255 / 0.35); border-radius: 5px; cursor: pointer; }
-    /* !important beats the hover/selected/unread background rules below. */
-    .action-row.marker-colored .action-main { background: var(--row-marker-bg) !important; color: var(--row-marker-fg) !important; }
+    /* !important beats the hover/unread background rules below. Selected rows keep the
+       selection colour — the marker tint must not hide it (rbowen). */
+    .action-row.marker-colored:not(.selected) .action-main { background: var(--row-marker-bg) !important; color: var(--row-marker-fg) !important; }
   `];
 }
 
