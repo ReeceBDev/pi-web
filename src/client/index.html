@@ -74,7 +74,21 @@
           }
           return false;
         }
-        document.addEventListener('touchmove', function (e) {
+        // rbowen: on some Android WebViews (his phone, Android 16) 100dvh stays at
+      // the ORIGINAL height when the keyboard shrinks the WebView view, so the
+      // app shell keeps its composer below the fold. Set --vvh (used by
+      // appStyles :host height) from the visual viewport on every resize.
+      (function () {
+        var v = window.visualViewport;
+        function setVvh() {
+          var h = Math.round(v ? v.height : window.innerHeight);
+          if (h > 1) document.documentElement.style.setProperty('--vvh', h + 'px');
+        }
+        window.addEventListener('resize', setVvh);
+        if (v) v.addEventListener('resize', setVvh);
+        setVvh();
+      })();
+      document.addEventListener('touchmove', function (e) {
           var t = e.composedPath ? e.composedPath()[0] : e.target;
           if (v && v.height < window.innerHeight - 10 && !scrollable(t)) e.preventDefault();
         }, { passive: false });
