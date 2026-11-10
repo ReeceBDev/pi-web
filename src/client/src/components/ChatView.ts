@@ -1193,6 +1193,17 @@ export class ChatView extends LitElement {
     return true;
   }
 
+  /** rbowen (task-entry-scroll): entering an idle task puts the newest message at the top of the viewport, unpinned. */
+  private alignLastMessageToTop(): void {
+    const chat = this.chat;
+    const anchors = this.scrollAnchorElements();
+    const last = anchors[anchors.length - 1];
+    if (chat === undefined || last === undefined) return;
+    chat.scrollTop += last.getBoundingClientRect().top - chat.getBoundingClientRect().top;
+    this.syncScrollMetrics();
+    this.pinnedToBottom = false;
+  }
+
   restoreScrollPosition() {
     const sessionId = this.sessionId;
     if (this.restoreScrollFrame !== undefined) cancelAnimationFrame(this.restoreScrollFrame);
@@ -1200,10 +1211,19 @@ export class ChatView extends LitElement {
       this.restoreScrollFrame = undefined;
       if (this.sessionId !== sessionId) return;
       this.withSuppressedScrollSave(() => {
-        if (this.pendingAsk !== undefined && this.scrollController.readPosition(sessionId) === undefined && this.alignOpenAskToTop()) return;
-        if (this.pendingDialogs.length > 0 && this.scrollController.readPosition(sessionId) === undefined && this.alignOpenDialogToTop()) return;
-        const result = this.scrollController.restorePosition(sessionId, this.chat, this.scrollAnchorElements(), { fallbackToBottom: this.shouldFallbackToBottomForMissingAnchor() });
-        this.handleScrollRestoreResult(sessionId, result);
+        // rbowen (task-entry-scroll): tabbing into a task lands on its newest
+        // content, never the previously saved reading position — an open ask
+        // or dialog aligned to the top, a live task pinned to the bottom
+        // following along, an idle task with its newest message at the top
+        // of the screen (queued prompts count as live: the task is about to
+        // stream, so it must follow).
+        if (this.alignOpenAskToTop()) return;
+        if (this.alignOpenDialogToTop()) return;
+        if (this.isSessionLive() || (this.status?.pendingMessageCount ?? 0) > 0) {
+          this.handleScrollRestoreResult(sessionId, this.scrollController.scrollToBottom(this.chat));
+          return;
+        }
+        this.alignLastMessageToTop();
       });
     });
   }
