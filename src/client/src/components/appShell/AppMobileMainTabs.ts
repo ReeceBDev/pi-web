@@ -68,12 +68,13 @@ export class AppMobileMainTabs extends LitElement {
             `;
           })}
           ${this.onShowNavigation === undefined ? null : html`<button type="button" class=${`navigation-menu-button${this.hiddenActiveDestination ? " selected" : ""}`} title="Navigation" aria-label="Navigation" aria-haspopup="dialog" @click=${this.onShowNavigation}>${renderNavigationMenuIcon()}</button>`}
-          ${this.renderHeaderButtons()}
         </div>
+        ${this.renderHeaderButtons()}
       </div>
     `;
   }
 
+  /** rbowen: pinned outside the scrolling strip so Actions is always reachable on a phone. */
   private renderHeaderButtons() {
     if (this.onToggleProjects === undefined && this.onShowActions === undefined) return null;
     return html`
@@ -189,8 +190,10 @@ export class AppMobileMainTabs extends LitElement {
     .tab-badge { flex: 0 0 auto; display: inline-block; min-width: 14px; margin-left: 0; border: 1px solid var(--pi-success-border); border-radius: 999px; background: var(--pi-success-surface); color: var(--pi-success); padding: 0 5px; font-size: 11px; line-height: 16px; text-align: center; }
     .tab-badge.unread { border-color: var(--pi-accent-border); background: var(--pi-selection-bg); color: var(--pi-accent); }
     button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 2px 9px; cursor: pointer; }
+    .header-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 3px 8px 3px 0; }
     @media (max-width: 760px) {
       .mobile-tabs { gap: 4px; padding: 2px 8px; }
+      .header-actions { padding: 2px 8px 2px 0; }
       .mobile-tabs-frame button { min-width: 44px; height: 24px; justify-content: center; gap: 4px; padding: 0 8px; }
       .mobile-tabs .navigation-tab { display: inline-flex; }
       .tab-fallback { display: inline-block; }

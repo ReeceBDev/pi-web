@@ -163,7 +163,7 @@ describe("application rendering boundaries", () => {
       const panel = app.shadowRoot?.querySelector("workspace-panel");
       expect(panel?.shadowRoot?.textContent).toContain(`Workspace panel unavailable: ${tool}`);
       expect(panel?.shadowRoot?.querySelector(".panel-content")).toBeNull();
-      const surface = app.shadowRoot?.querySelector(desktop ? "workspace-panel" : collapsed ? "app-context-bar" : "app-mobile-main-tabs");
+      const surface = app.shadowRoot?.querySelector("app-mobile-main-tabs");
       const menu = surface?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
       expect(menu).not.toBeNull();
       expect(menu?.classList.contains("selected")).toBe(false);
@@ -188,8 +188,10 @@ describe("application rendering boundaries", () => {
     shell.isMobileNavigationLayout = true;
     app.requestUpdate();
     await settle(app);
-    const menu = app.shadowRoot?.querySelector("app-context-bar")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
-    expect(menu?.classList.contains("selected")).toBe(true);
+    const menu = app.shadowRoot?.querySelector("app-mobile-main-tabs")?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
+    // The tab bar always renders now; the ☰ is highlighted only when the
+    // current destination is hidden from the tabs (the hidden tool case).
+    expect(menu?.classList.contains("selected")).toBe(mainView === "workspace");
     menu?.click();
     await settle(app);
     const dialog = app.shadowRoot?.querySelector<NavigationDialog>("navigation-dialog");
@@ -246,7 +248,7 @@ describe("application rendering boundaries", () => {
     expect(open?.querySelector("svg")).not.toBeNull();
     expect(open?.classList.contains("selected")).toBe(false);
     const tabStrip = app.shadowRoot?.querySelector("app-mobile-main-tabs");
-    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > .header-actions button:last-child")?.getAttribute("aria-label")).toBe("Show Actions");
+    expect(tabStrip?.shadowRoot?.querySelector(".header-actions button:last-child")?.getAttribute("aria-label")).toBe("Show Actions");
     expect(tabStrip?.shadowRoot?.querySelector('button[aria-label="Navigation"]')?.classList.contains("selected")).toBe(false);
     open?.click();
     await settle(app);
@@ -275,7 +277,7 @@ describe("application rendering boundaries", () => {
     expect(Reflect.get(reloaded, "navigationPreferences")).toEqual(loadNavigationPreferences());
   });
 
-  it("collapses only the mobile tab bar, keeping breadcrumbs and separate Navigation and Actions controls", async () => {
+  it("renders the mobile tab bar with Navigation and Actions; no separate breadcrumb bar", async () => {
     saveNavigationPreferences({ hiddenIds: [], mobileCollapsed: true });
     const app = await mountApp({});
     const shell: unknown = Reflect.get(app, "appShell");
@@ -283,26 +285,23 @@ describe("application rendering boundaries", () => {
     shell.isMobileNavigationLayout = true;
     app.requestUpdate();
     await settle(app);
-    expect(app.shadowRoot?.querySelector("app-mobile-main-tabs")).toBeNull();
-    const context = app.shadowRoot?.querySelector("app-context-bar");
-    expect(context?.shadowRoot?.querySelectorAll(".context-item")).toHaveLength(3);
-    const controls = [...context?.shadowRoot?.querySelectorAll<HTMLButtonElement>(".context-actions button") ?? []];
-    expect(controls.map((button) => button.getAttribute("aria-label") ?? button.textContent.trim())).toEqual(["Navigation", "Show Actions"]);
-    expect(controls[0]?.classList.contains("selected")).toBe(true);
-    controls[0]?.focus();
-    controls[0]?.click();
+    // rbowen: the tab bar IS the mobile top bar — it renders even when the
+    // collapse preference is set, and the breadcrumb context bar is gone.
+    const tabStrip = app.shadowRoot?.querySelector("app-mobile-main-tabs");
+    expect(tabStrip).not.toBeNull();
+    expect(app.shadowRoot?.querySelector("app-context-bar")).toBeNull();
+    const hamburger = tabStrip?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
+    expect(hamburger?.querySelector("svg")).not.toBeNull();
+    expect(hamburger?.classList.contains("selected")).toBe(false);
+    expect(tabStrip?.shadowRoot?.querySelector(".header-actions button:last-child")?.getAttribute("aria-label")).toBe("Show Actions");
+    hamburger?.focus();
+    hamburger?.click();
     await settle(app);
     const dialog = app.shadowRoot?.querySelector("navigation-dialog");
     expect(dialog?.shadowRoot?.textContent).toContain("Chat");
     dialog?.shadowRoot?.querySelector<HTMLButtonElement>(".mobile-navigation button:first-child")?.click();
     await settle(app);
-    expect(app.shadowRoot?.querySelector("app-mobile-main-tabs")).not.toBeNull();
-    expect(context?.shadowRoot?.querySelector('button[aria-label="Navigation"]')).toBeNull();
-    const tabStrip = app.shadowRoot?.querySelector("app-mobile-main-tabs");
-    const hamburger = tabStrip?.shadowRoot?.querySelector<HTMLButtonElement>('button[aria-label="Navigation"]');
-    expect(hamburger?.querySelector("svg")).not.toBeNull();
-    expect(hamburger?.classList.contains("selected")).toBe(false);
-    expect(tabStrip?.shadowRoot?.querySelector(".mobile-tabs > .header-actions button:last-child")?.getAttribute("aria-label")).toBe("Show Actions");
+    expect(loadNavigationPreferences()).toEqual({ hiddenIds: [], mobileCollapsed: false });
     dialog?.shadowRoot?.querySelector<HTMLButtonElement>("header button")?.click();
     await settle(app);
     expect(deepActiveElement(document)).toBe(hamburger);
@@ -310,7 +309,6 @@ describe("application rendering boundaries", () => {
     await settle(app);
     const reopenedDialog = app.shadowRoot?.querySelector("navigation-dialog");
     expect(reopenedDialog).not.toBeNull();
-    expect(loadNavigationPreferences()).toEqual({ hiddenIds: [], mobileCollapsed: false });
 
     // A resize must invalidate the guarded tab surface even with collapse enabled.
     reopenedDialog?.shadowRoot?.querySelector<HTMLButtonElement>(".mobile-navigation button:last-child")?.click();

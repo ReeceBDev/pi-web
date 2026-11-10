@@ -76,12 +76,10 @@ import { deepActiveElement, focusElement, hasRenderedModal } from "./modalLayerR
 import "./SettingsDialog";
 import "./WorkspacePanel";
 import type { WorkspacePanelEmptyState } from "./WorkspacePanel";
-import "./appShell/AppContextBar";
 import "./appShell/AppMobileMainTabs";
 import type { AppMobileMainTab } from "./appShell/AppMobileMainTabs";
 import { shouldShowMachinesSection, type AppNavigationPanel, type NavigationFocusTarget } from "./appShell/AppNavigationPanel";
 import "./appShell/AppPanelEdgeControl";
-import "./appShell/AppRefreshControl";
 import { errorBanner } from "./errorBanner";
 import { deprecatedAgentInputsBanner, deprecatedAgentInputsWarnings } from "./deprecatedAgentInputsBanner";
 import { appStyles } from "./shared";
@@ -3431,9 +3429,6 @@ export class PiWebApp extends LitElement {
     `;
   }
 
-  private readonly handleOpenNavigationSection = (section: NavigationSection) => { this.openNavigationSection(section); };
-  private readonly handleReloadApp = () => { this.hardReloadApp(); };
-
   @state() private navigationPreferences = loadNavigationPreferences();
   @state() private navigationDialogOpen = false;
 
@@ -3465,25 +3460,6 @@ export class PiWebApp extends LitElement {
     saveNavigationPreferences(preferences);
   };
 
-  private renderContextBar() {
-    if (!this.appShell.isMobileNavigationLayout) return null;
-    return html`
-      <app-context-bar
-        .machines=${this.state.machines}
-        .machine=${this.state.selectedMachine}
-        .locationIndicator=${this.appShell.isPwaDisplayMode}
-        .project=${this.state.selectedProject}
-        .workspace=${this.state.selectedWorkspace}
-        .session=${this.state.selectedSession}
-        .refreshControl=${this.appShell.shouldShowAppRefreshInContextBar() ? this.renderAppRefresh() : undefined}
-        .onOpenSection=${this.handleOpenNavigationSection}
-        .onShowNavigation=${this.navigationPreferences.mobileCollapsed ? this.showNavigation : undefined}
-        .hiddenActiveDestination=${this.availableNavigationTabs().some((tab) => tab.id === this.selectedNavigationTab())}
-        .onShowActions=${this.navigationActions.showActions}
-      ></app-context-bar>
-    `;
-  }
-
   /** rbowen: Projects section toggle — now lives in the tab bars, not the nav header. */
   private readonly toggleProjectsHidden = (): void => {
     this.projectsHidden = !this.projectsHidden;
@@ -3503,7 +3479,8 @@ export class PiWebApp extends LitElement {
   }
 
   private renderMobileMainTabs() {
-    if (this.appShell.isMobileNavigationLayout && this.navigationPreferences.mobileCollapsed) return null;
+    // rbowen: the tab bar IS the mobile top bar now — no separate breadcrumb
+    // bar, so it renders regardless of the collapse preference.
     const panels = this.visibleWorkspacePanels();
     const availableTabs = this.availableNavigationTabs(panels);
     const visibleTabs = visibleNavigationTabs(availableTabs, this.navigationPreferences.hiddenIds);
@@ -3566,10 +3543,6 @@ export class PiWebApp extends LitElement {
     ];
   }
 
-  private renderAppRefresh() {
-    return html`<app-refresh-control .onReload=${this.handleReloadApp}></app-refresh-control>`;
-  }
-
   private renderServerNoticeBanners(): TemplateResult | null {
     const machineId = selectedMachineId(this.state);
     const projection = this.serverNotices.projection(machineId);
@@ -3603,7 +3576,6 @@ export class PiWebApp extends LitElement {
         <aside id="navigation-panel">${this.appShell.isMobileNavigationLayout ? null : this.renderNavigationPanel()}</aside>
         ${this.renderNavigationPanelEdgeControl()}
         <main class=${mainViewClass(mainView)}>
-          ${this.renderContextBar()}
           ${guard([...this.workspaceSurfaceInputs(), state.sessions, this.unreadSessionIds], () => this.renderMobileMainTabs())}
           ${this.unknownRouteView() === undefined ? null : html`<div class="error warning" role="alert"><span class="error-text">Unknown view: ${this.unknownRouteView()}</span></div>`}
           ${this.renderServerNoticeBanners()}

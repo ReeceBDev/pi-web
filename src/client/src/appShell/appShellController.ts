@@ -50,10 +50,6 @@ export class AppShellController implements ReactiveController {
     return !this.isMobileNavigationLayout && !this.isPwaDisplayMode;
   }
 
-  shouldShowAppRefreshInContextBar(): boolean {
-    return this.isPwaDisplayMode && this.isMobileNavigationLayout;
-  }
-
   defaultRouteView(): AppState["mainView"] {
     return this.isMobileNavigationLayout ? "navigation" : "chat";
   }
