@@ -131,9 +131,7 @@ export class WorkspaceFilesPanel extends LitElement {
         @drop=${this.handleDrop}
       >
         <section class="toolbar">
-          ${previewOpen
-            ? html`<button title="Back to file list" @click=${() => { runtime.clearSelection(context); }}>‹ Back</button>`
-            : html`<strong>Files</strong>`}
+          ${previewOpen ? html`<button title="Back to file list" @click=${() => { runtime.clearSelection(context); }}>‹ Back</button>` : null}
           ${scope.treeLoading ? html`<span class="muted">loading…</span>` : null}
           ${scope.treeStale ? html`<span class="stale">stale</span>` : null}
           <div class="toolbar-actions">
