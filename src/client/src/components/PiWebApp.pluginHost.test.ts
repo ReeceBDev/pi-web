@@ -1175,6 +1175,73 @@ describe("PiWebApp plugin host", () => {
     expect(browser.replaced).toEqual([]);
   });
 
+  it("boots an empty route onto the first project and its preferred workspace", async () => {
+    const browser = installBrowserWindow("http://localhost/app");
+    const app = new PiWebApp();
+    const otherProject: Project = { id: "project-2", name: "Other", path: "/other", createdAt: "now" };
+    const featureWorkspace: Workspace = { id: "workspace-feature", projectId: project.id, path: "/repo-feature", label: "feature", isMain: false, effectiveConfig: {} };
+    const session = runtimeRecoverySession(workspace);
+    setAppState(app, {
+      ...initialAppState(),
+      projects: [project, otherProject],
+    });
+    await installRuntimeRecoveryBoundaries(app, () => Promise.resolve([featureWorkspace, workspace]), session);
+
+    await callAsyncAppMethod(app, "restoreRoute", false);
+
+    expect(appState(app).selectedProject?.id).toBe(project.id);
+    // The main workspace wins over the first-listed one.
+    expect(appState(app).selectedWorkspace?.id).toBe(workspace.id);
+    expect(appState(app).selectedSession?.id).toBe(session.id);
+    expect(browser.replaced).toEqual([]);
+  });
+
+  it("clears selection for an empty route when a project is already selected", async () => {
+    const browser = installBrowserWindow("http://localhost/app");
+    const app = new PiWebApp();
+    setAppState(app, {
+      ...initialAppState(),
+      projects: [project],
+      selectedProject: project,
+      selectedWorkspace: workspace,
+      workspaces: [workspace],
+      workspaceTool: "core:workspace.terminal",
+      mainView: "chat",
+    });
+    await markPluginLoadingReady(app);
+    const selectProject = vi.fn(() => Promise.resolve(undefined));
+    const workspaces: unknown = Reflect.get(app, "workspaces");
+    if (typeof workspaces !== "object" || workspaces === null) throw new Error("PiWebApp workspace controller was unavailable");
+    if (!Reflect.set(workspaces, "selectProject", selectProject)) throw new Error("Could not stub workspace project selection");
+
+    await callAsyncAppMethod(app, "restoreRoute", false);
+
+    // A selected project is not booted; the empty route still clears selection.
+    expect(selectProject).not.toHaveBeenCalled();
+    expect(appState(app).selectedProject).toBeUndefined();
+    expect(appState(app).selectedWorkspace).toBeUndefined();
+    expect(browser.replaced).toEqual([]);
+  });
+
+  it("clears selection for an empty route when no projects are loaded", async () => {
+    const browser = installBrowserWindow("http://localhost/app");
+    const app = new PiWebApp();
+    setAppState(app, {
+      ...initialAppState(),
+      projects: [],
+      selectedProject: project,
+      selectedWorkspace: workspace,
+      workspaces: [workspace],
+    });
+    await markPluginLoadingReady(app);
+
+    await callAsyncAppMethod(app, "restoreRoute", false);
+
+    expect(appState(app).selectedProject).toBeUndefined();
+    expect(appState(app).selectedWorkspace).toBeUndefined();
+    expect(browser.replaced).toEqual([]);
+  });
+
   it("preserves a missing session route while retaining its workspace", async () => {
     const browser = installBrowserWindow("http://localhost/app?project=project-1&workspace=workspace-1&session=deleted-session&view=chat");
     const app = new PiWebApp();

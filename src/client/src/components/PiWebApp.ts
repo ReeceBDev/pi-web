@@ -785,6 +785,17 @@ export class PiWebApp extends LitElement {
           route.workspaceId = resolved.workspace.id;
         }
       }
+      // rbowen: the Workspaces section is gone from the navigation panel, so an
+      // empty route can no longer get a workspace selected through it. Boot an
+      // empty route onto the first project; selectProject auto-selects its top
+      // (main) workspace and sessions, which is what the removed section made
+      // visible. A route with no project and an existing selection still falls
+      // through to the clear below, so nothing churns mid-session.
+      if ((route.projectId === undefined || route.projectId === "")
+        && this.state.selectedProject === undefined) {
+        const firstProject = this.state.projects[0];
+        if (firstProject !== undefined) route.projectId = firstProject.id;
+      }
       const unavailablePanelViewRoute = parsedRoute.view !== undefined && route.view === undefined;
       const restoredWorkspaceIdentity = workspaceRouteIdentity(route);
       const baseFinishOptions: WorkspaceRouteFinishOptions = {
