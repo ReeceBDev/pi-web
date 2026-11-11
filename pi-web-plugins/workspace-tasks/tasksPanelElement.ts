@@ -284,12 +284,13 @@ function taskStyles(): string {
       :host { display: contents; }
       .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--pi-border-muted); }
       .toolbar-tasks { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-      .viewer { box-sizing: border-box; min-height: 0; overflow: auto; padding: 12px; }
-      .tasks-viewer { display: grid; align-content: start; gap: 12px; }
-      .tasks { display: grid; gap: 14px; }
-      .task-group { display: grid; gap: 10px; }
-      .task-group h3 { margin: 4px 0 0; color: var(--pi-text-secondary); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
-      .task-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--pi-border); border-radius: 10px; background: var(--pi-surface); padding: 12px; }
+      .viewer { box-sizing: border-box; min-height: 0; overflow: auto; padding: 8px 0; }
+      .tasks-viewer { display: grid; align-content: start; gap: 6px; }
+      .tasks { display: grid; gap: 8px; }
+      .task-group { display: grid; gap: 0; }
+      .task-group h3 { margin: 8px 0 2px; padding: 0 10px; color: var(--pi-text-secondary); font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; }
+      .task-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 0; border-radius: 0; background: transparent; padding: 6px 10px; }
+      .task-card + .task-card { border-top: 1px solid var(--pi-border-muted); }
       .task-copy { display: grid; min-width: 0; gap: 5px; }
       .task-copy span, .muted { color: var(--pi-muted); }
       code, pre { border: 1px solid var(--pi-border-muted); border-radius: 6px; background: var(--pi-bg); color: var(--pi-text-secondary); font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

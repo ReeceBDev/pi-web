@@ -32,7 +32,11 @@ export async function startDictation(events: DictationEvents = {}): Promise<Dict
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
   } catch (error) {
     void discardSession(session.id);
-    throw new Error(microphoneErrorMessage(error), { cause: error });
+    const micState = await microphonePermissionState();
+    // console.error so any browser-error reporting that reaches the server
+    // carries the raw exception, not just the friendly hint text.
+    console.error("Dictation getUserMedia failed:", error, "microphone permission state:", micState);
+    throw new Error(microphoneErrorMessage(error, micState), { cause: error });
   }
 
   const context = new AudioContext();
@@ -161,10 +165,23 @@ async function responseError(response: Response): Promise<Error> {
   return new HttpRequestError(message, response.status);
 }
 
-function microphoneErrorMessage(error: unknown): string {
+async function microphonePermissionState(): Promise<string> {
+  try {
+    const status = await navigator.permissions.query({ name: "microphone" });
+    return status.state;
+  } catch {
+    // Browsers without navigator.permissions (or without the microphone
+    // name) throw — report the state as unavailable.
+    return "unavailable";
+  }
+}
+
+function microphoneErrorMessage(error: unknown, micState: string): string {
   if (error instanceof DOMException && error.name === "NotAllowedError") return "Microphone access was denied. Allow microphone permission for this site and try again.";
   if (error instanceof DOMException && error.name === "NotFoundError") return "No microphone was found on this device.";
-  return error instanceof Error ? `Could not start dictation: ${error.message}` : "Could not start dictation.";
+  const name = error instanceof DOMException ? error.name : error instanceof Error ? error.name : "Error";
+  const message = error instanceof Error ? error.message : String(error);
+  return `Could not start dictation: ${name}: ${message} (microphone permission: ${micState})`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

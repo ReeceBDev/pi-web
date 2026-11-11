@@ -42,7 +42,12 @@ const PROBE_JS = `
     return scroller;
   }
 
+  var frames = 0;
+  requestAnimationFrame(function loop() { frames++; requestAnimationFrame(loop); });
+
   setInterval(function () {
+    ev("f", { fps: Math.min(frames, 999) * 5 });
+    frames = 0;
     var s = findScroller();
     if (s) ev("s", { y: Math.round(s.scrollTop), sh: s.scrollHeight, ch: s.clientHeight });
   }, 200);
