@@ -38,6 +38,7 @@ export class WorkspaceFilesPanel extends LitElement {
   private modeStore: WorkspaceFileViewModeStore = createWorkspaceFileViewModeStore(undefined);
   private uploadReturnFocus: HTMLElement | undefined;
   private visibilityObserver: ResizeObserver | undefined;
+  private previewWasOpen = false;
 
   protected override willUpdate(changedProperties: PropertyValues<this>): void {
     if (!changedProperties.has("context") && !changedProperties.has("runtime")) return;
@@ -53,6 +54,10 @@ export class WorkspaceFilesPanel extends LitElement {
 
   protected override updated(): void {
     this.openPendingDialog();
+    // rbowen (previewchat): tell the host when the preview closes so it can hide the overlay composer even if the toggle button is gone (Back, tab switch).
+    const previewOpen = this.context !== undefined && this.runtime !== undefined && this.scope?.selectedFilePath !== undefined;
+    if (this.previewWasOpen && !previewOpen) this.dispatchEvent(new CustomEvent("preview-chat-close", { bubbles: true, composed: true }));
+    this.previewWasOpen = previewOpen;
   }
 
   override connectedCallback(): void {
@@ -143,6 +148,7 @@ export class WorkspaceFilesPanel extends LitElement {
         ${scope.error === undefined ? null : html`<p class="files-error" role="alert">${scope.error}</p>`}
         ${this.renderUploadProgress(context, runtime, scope)}
         ${previewOpen ? viewer : tree}
+        ${previewOpen ? this.renderPreviewChatFab() : null}
         <div class="drop-overlay" aria-hidden=${this.dragActive ? "false" : "true"}>
           <div>
             <strong>Drop files to upload</strong>
@@ -178,6 +184,15 @@ export class WorkspaceFilesPanel extends LitElement {
     }
     this.scope = runtime.prepare(context);
   }
+
+  /** rbowen (previewchat): chat pill in the file preview's bottom-right, styled like the chat's jump-to-bottom pill; PiWebApp listens and shows the prompt editor as a bottom overlay. */
+  private readonly renderPreviewChatFab = (): TemplateResult => {
+    return html`
+      <button type="button" class="preview-chat-fab" title="Chat about this file" aria-label="Chat about this file" @click=${() => { this.dispatchEvent(new CustomEvent("preview-chat-toggle", { bubbles: true, composed: true })); }}>
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+      </button>
+    `;
+  };
 
   private renderTreeEntry(
     context: WorkspacePanelContext,
@@ -481,6 +496,8 @@ export class WorkspaceFilesPanel extends LitElement {
     .upload-file-main span, .upload-file-main small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .upload-file-status { font-size: 12px; white-space: nowrap; }
     .upload-actions { justify-content: end; }
+    .preview-chat-fab { position: absolute; right: 16px; bottom: 12px; z-index: 10; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border-radius: 999px; background: var(--pi-bg-overlay); color: var(--pi-text-secondary); backdrop-filter: blur(6px); box-shadow: 0 2px 8px rgb(0 0 0 / 0.4); }
+    .preview-chat-fab:hover { color: var(--pi-text-bright); border-color: var(--pi-accent-border); }
     dialog.upload-dialog { box-sizing: border-box; width: min(560px, calc(100% - 40px)); max-height: min(720px, calc(100% - 40px)); max-height: min(720px, calc(100dvh - 40px)); margin: auto; padding: 0; border: 1px solid var(--pi-border); border-radius: 14px; background: var(--pi-bg); color: var(--pi-text); box-shadow: 0 18px 70px var(--pi-shadow-strong); overflow: hidden; }
     dialog.upload-dialog[open] { display: flex; flex-direction: column; }
     dialog.upload-dialog::backdrop { background: var(--pi-overlay); }

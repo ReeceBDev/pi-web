@@ -112,6 +112,26 @@ describe("Files panel component boundary", () => {
     expect(buttonWithText(panel.shadowRoot, "README.md")).toBeDefined();
   });
 
+  it("shows the preview chat pill and reports toggle/close to the host", async () => {
+    const context = createContext({ files: createFiles({ listFiles: (path) => Promise.resolve(treeResponse(path, [{ name: "README.md", path: "README.md", type: "file" }])) }) });
+    const panel = await mountPanel(context);
+    const events: string[] = [];
+    panel.addEventListener("preview-chat-toggle", () => events.push("toggle"));
+    panel.addEventListener("preview-chat-close", () => events.push("close"));
+
+    expect(panel.shadowRoot?.querySelector(".preview-chat-fab")).toBeNull();
+    await vi.waitFor(() => { expect(buttonWithText(panel.shadowRoot, "README.md")).toBeDefined(); });
+    buttonWithText(panel.shadowRoot, "README.md").click();
+    await vi.waitFor(() => { expect(panel.shadowRoot?.querySelector(".preview-chat-fab")).not.toBeNull(); });
+
+    requiredElement(panel.shadowRoot?.querySelector<HTMLButtonElement>(".preview-chat-fab"), "preview chat fab").click();
+    expect(events).toContain("toggle");
+
+    buttonWithText(panel.shadowRoot, "Back").click();
+    await vi.waitFor(() => { expect(events).toContain("close"); });
+    expect(panel.shadowRoot?.querySelector(".preview-chat-fab")).toBeNull();
+  });
+
   it("cancels an unobserved tree request on disconnect and reloads it on reconnect", async () => {
     const signals: AbortSignal[] = [];
     let listCount = 0;

@@ -1690,6 +1690,21 @@ export class PiWebApp extends LitElement {
     ];
   }
 
+  /** rbowen (previewchat): file-preview chat pill toggles the prompt editor as a bottom overlay over the workspace panel. */
+  @state() private previewChatOpen = false;
+
+  /** rbowen (previewchat): with no session selected, give the composer a target — the workspace's preferred (last-used/most-recent) session. */
+  private async openPreviewChat(): Promise<void> {
+    if (this.state.selectedSession === undefined) {
+      const workspace = this.state.selectedWorkspace;
+      if (workspace === undefined) return;
+      const session = this.sessions.preferredSession(workspace.path, this.state.sessions, undefined);
+      if (session === undefined) return;
+      await this.sessions.selectSession(session);
+    }
+    this.previewChatOpen = !this.previewChatOpen;
+  }
+
   private renderWorkspacePanel() {
     const workspace = this.state.selectedWorkspace;
     const panelContext = workspace === undefined ? undefined : this.createWorkspacePanelContext(workspace);
@@ -1699,6 +1714,8 @@ export class PiWebApp extends LitElement {
       <workspace-panel
         id="workspace-panel"
         @workspace-file-open=${this.handleWorkspaceFileOpen}
+        @preview-chat-toggle=${() => { void this.openPreviewChat(); }}
+        @preview-chat-close=${() => { this.previewChatOpen = false; }}
         .workspace=${workspace}
         .panelContext=${panelContext}
         .emptyState=${emptyState}
@@ -3579,7 +3596,7 @@ export class PiWebApp extends LitElement {
       <div class=${this.panelCollapse.shellClass(mainView)} style=${this.panelResize.shellStyle({ navigation: this.resizablePanelConstraints("navigation"), workspace: this.resizablePanelConstraints("workspace") })}>
         <aside id="navigation-panel">${this.appShell.isMobileNavigationLayout ? null : this.renderNavigationPanel()}</aside>
         ${this.renderNavigationPanelEdgeControl()}
-        <main class=${mainViewClass(mainView)}>
+        <main class=${mainViewClass(mainView) + (this.previewChatOpen ? " preview-chat-open" : "")}>
           ${guard([...this.workspaceSurfaceInputs(), state.sessions, this.unreadSessionIds], () => this.renderMobileMainTabs())}
           ${this.unknownRouteView() === undefined ? null : html`<div class="error warning" role="alert"><span class="error-text">Unknown view: ${this.unknownRouteView()}</span></div>`}
           ${this.renderServerNoticeBanners()}
