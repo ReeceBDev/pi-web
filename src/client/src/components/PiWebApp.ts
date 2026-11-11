@@ -64,7 +64,7 @@ import "./SessionTreeNavigator";
 import "./ChatView";
 import type { ChatView } from "./ChatView";
 import "./PromptEditor";
-import type { PromptEditor } from "./PromptEditor";
+import type { PromptEditor, VoiceSendTarget } from "./PromptEditor";
 import "./StatusBar";
 import "./CommandPicker";
 import "./ModelPicker";
@@ -3317,7 +3317,14 @@ export class PiWebApp extends LitElement {
     if (value !== "") await this.sessions.setThinkingLevel(value);
   }
 
-  private sendPrompt(text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string): void {
+  private sendPrompt(text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string, target?: VoiceSendTarget): void | Promise<void> {
+    if (target !== undefined) {
+      // Detached voice dictation: deliver straight to the chat the mic started
+      // in, no matter which session is selected now. Direct API call because
+      // sessionController.send() is selected-session-bound; pending-start
+      // sessions cannot take direct prompts (a failure rejects to the composer).
+      return sessionsApi.prompt({ id: target.sessionId, cwd: target.cwd }, text, streamingBehavior, target.machineId).then(() => undefined);
+    }
     const hasAttachments = attachments !== undefined && attachments.length > 0;
     if (!hasAttachments && streamingBehavior === undefined && this.auth.handleSlashCommand(text)) return;
     void this.sessions.send(text, streamingBehavior, attachments, delivery, folder);
@@ -3326,8 +3333,8 @@ export class PiWebApp extends LitElement {
   // Stable handler identities for child components. Inlined arrow closures
   // would be a fresh reference on every render, forcing Lit to re-commit the
   // bindings each time the app re-renders; bound class fields keep them constant.
-  private readonly handleSendPrompt = (text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string): void => {
-    this.sendPrompt(text, streamingBehavior, attachments, delivery, folder);
+  private readonly handleSendPrompt = (text: string, streamingBehavior?: "steer" | "followUp", attachments?: import("../api").PromptAttachment[], delivery?: import("../../../shared/apiTypes").PromptAttachmentDelivery, folder?: string, target?: VoiceSendTarget): void | Promise<void> => {
+    return this.sendPrompt(text, streamingBehavior, attachments, delivery, folder, target);
   };
 
   private readonly handleStopActiveWork = (): void => {

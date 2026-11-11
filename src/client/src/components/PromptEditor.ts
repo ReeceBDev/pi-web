@@ -24,6 +24,13 @@ import { startDictation, type DictationController, type DictationEvents } from "
 import { thinkingGauge, thinkingLevelLabel } from "../../../shared/thinkingLevels";
 import "./AutocompleteMenu";
 
+/** Identifies the chat a dictated message must land in, even after navigation. */
+export interface VoiceSendTarget {
+  machineId: string;
+  sessionId: string;
+  cwd: string;
+}
+
 @customElement("prompt-editor")
 export class PromptEditor extends LitElement {
   @property({ type: Boolean }) disabled = false;
@@ -44,7 +51,7 @@ export class PromptEditor extends LitElement {
   @property({ type: Boolean }) canStop = false;
   @property({ attribute: false }) status?: SessionStatus;
   @property({ type: Boolean }) sending = false;
-  @property({ attribute: false }) onSend?: (text: string, streamingBehavior?: "steer" | "followUp", attachments?: PromptAttachment[], delivery?: PromptAttachmentDelivery, folder?: string) => void | Promise<void>;
+  @property({ attribute: false }) onSend?: (text: string, streamingBehavior?: "steer" | "followUp", attachments?: PromptAttachment[], delivery?: PromptAttachmentDelivery, folder?: string, target?: VoiceSendTarget) => void | Promise<void>;
   @property({ attribute: false }) onStop?: () => void;
   @property({ attribute: false }) onSelectModel?: () => void;
   @property({ attribute: false }) onSelectThinking?: () => void;
@@ -73,6 +80,10 @@ export class PromptEditor extends LitElement {
   private voiceBaseText = "";
   /** Characters at the end of the draft that belong to the dictation transcript. */
   private voiceChars = 0;
+  /** Chat the dictation started in; finish() delivers here even after navigation. */
+  private voiceOrigin: VoiceSendTarget | undefined = undefined;
+  /** True once the user navigated away from the origin chat mid-dictation. */
+  private voiceDetached = false;
   /** Test seam: inject a fake dictation controller factory. */
   @property({ attribute: false }) createDictation: (events: DictationEvents) => Promise<DictationController> = startDictation;
   private requestVersion = 0;
@@ -98,6 +109,13 @@ export class PromptEditor extends LitElement {
     this.currentInputMode = inputModeForDraft(this.draft);
     this.completions = [];
     this.selectedIndex = 0;
+    if (this.voice !== "idle" && this.voiceOrigin !== undefined
+        && (this.voiceOrigin.machineId !== this.machineId || this.voiceOrigin.sessionId !== this.sessionId)) {
+      // Dictation is bound to its origin chat: stop painting partials into the
+      // newly selected chat's draft; finish() delivers to the origin instead.
+      this.voiceDetached = true;
+      this.voiceChars = 0;
+    }
   }
 
   protected override shouldUpdate(changed: PropertyValues<this>): boolean {
@@ -552,9 +570,11 @@ export class PromptEditor extends LitElement {
     if (editor === undefined) return;
     this.voiceBaseText = editor.state.doc.toString();
     this.voiceChars = 0;
+    this.voiceOrigin = { machineId: this.machineId, sessionId: this.sessionId ?? "", cwd: this.cwd ?? "" };
+    this.voiceDetached = false;
     try {
       this.dictationController = await this.createDictation({
-        onPartial: (text) => { this.insertVoiceText(text); },
+        onPartial: (text) => { if (!this.voiceDetached) this.insertVoiceText(text); },
         onError: (message) => { this.voiceError = message; },
       });
     } catch (error) {
@@ -567,24 +587,80 @@ export class PromptEditor extends LitElement {
   private async handleVoiceSend() {
     if (this.voice !== "recording" || this.dictationController === undefined) return;
     this.voice = "finishing";
+    const controller = this.dictationController;
     let finalText: string;
+    let error: string | undefined;
     try {
-      finalText = await this.dictationController.finish();
-    } catch (error) {
-      this.voiceError = error instanceof Error ? error.message : "Transcription failed.";
-      this.voice = "idle";
-      this.dictationController = undefined;
-      return;
+      finalText = await controller.finish();
+    } catch (cause) {
+      // The tail (audio after the last committed chunk) is lost on failure,
+      // but everything already transcribed stays deliverable.
+      finalText = controller.committedText?.() ?? "";
+      error = cause instanceof Error ? cause.message : "Transcription failed.";
     }
-    this.insertVoiceText(finalText);
+    // Read origin/detached at delivery time: the user may have navigated away
+    // while the finish request was in flight.
+    const origin = this.voiceOrigin;
+    const detached = this.voiceDetached;
     this.voice = "idle";
     this.dictationController = undefined;
+    this.voiceOrigin = undefined;
+    this.voiceDetached = false;
+    if (detached) {
+      await this.deliverDetachedDictation(origin, finalText, error);
+      return;
+    }
+    if (error !== undefined && finalText === "") {
+      this.voiceError = error;
+      return;
+    }
+    const suffix = error === undefined || finalText === "" ? "" : " [voice dictation: end not transcribed]";
+    this.insertVoiceText(`${finalText}${suffix}`);
     this.send("followUp");
+  }
+
+  /** Deliver a finished dictation to its origin chat after the user navigated away. */
+  private async deliverDetachedDictation(origin: VoiceSendTarget | undefined, finalText: string, error: string | undefined) {
+    const originKey = origin === undefined ? undefined : draftStorageKey(origin.machineId, origin.sessionId);
+    if (originKey === undefined || origin === undefined) return;
+    const suffix = error === undefined || finalText === "" ? "" : " [voice dictation: end not transcribed]";
+    const base = this.voiceBaseText;
+    const text = `${base}${base === "" || finalText === "" ? "" : " "}${finalText}${suffix}`;
+    if (text.trim() === "") {
+      // Nothing was transcribed: drop the stale partial draft.
+      clearDraft(originKey);
+      if (error !== undefined) this.voiceError = error;
+      return;
+    }
+    try {
+      await this.onSend?.(text, "followUp", undefined, undefined, undefined, origin);
+    } catch (cause) {
+      // Keep the origin draft (base + partials) so nothing is lost; the user
+      // can open the origin chat and send manually.
+      this.voiceError = cause instanceof Error ? cause.message : "Could not deliver dictation.";
+      return;
+    }
+    // Staged attachments stay in origin storage on purpose; the dictated
+    // message is text-only.
+    clearDraft(originKey);
   }
 
   private handleVoiceCancel() {
     this.dictationController?.cancel();
     this.dictationController = undefined;
+    const origin = this.voiceOrigin;
+    const detached = this.voiceDetached;
+    this.voiceOrigin = undefined;
+    this.voiceDetached = false;
+    if (detached && origin !== undefined) {
+      // The visible editor belongs to another chat now; restore the origin's
+      // stored draft to its pre-dictation text instead.
+      const originKey = draftStorageKey(origin.machineId, origin.sessionId);
+      if (originKey !== undefined) saveDraft(originKey, this.voiceBaseText);
+      this.voiceChars = 0;
+      this.voice = "idle";
+      return;
+    }
     this.removeVoiceText();
     this.voice = "idle";
   }
