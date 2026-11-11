@@ -77,7 +77,7 @@ describe("FcmPushService completion delivery", () => {
       title: "Task finished",
       body: "demo",
       completedAt: "2026-01-01T00:00:00.000Z",
-      url: `${BASE_URL}?session=s1&view=chat`,
+      url: `${BASE_URL}?session=s1&cwd=%2Fwork%2Fdemo&view=chat`,
     });
     expect(service).toBeDefined();
   });
@@ -95,7 +95,7 @@ describe("FcmPushService completion delivery", () => {
       body: "demo",
       sessionTitle: "Fix the login bug",
       completedAt: "2026-01-01T00:00:00.000Z",
-      url: `${BASE_URL}?session=s1&view=chat`,
+      url: `${BASE_URL}?session=s1&cwd=%2Fwork%2Fdemo&view=chat`,
     });
 
     const { hub: bareHub, sends: bareSends } = await harness();

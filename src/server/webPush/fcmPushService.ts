@@ -169,7 +169,9 @@ export class FcmPushService {
     // FCM data-message cap bounds the title at SESSION_UNREAD_TITLE_MAX_LENGTH.
     const segments = event.cwd.split(/[\\/]/).filter(Boolean);
     const url = new URL(this.deps.baseUrl);
-    url.search = new URLSearchParams({ session: event.sessionId, view: "chat" }).toString();
+    // cwd rides along so the client can prefetch the transcript before the
+    // catalog chain resolves the session's workspace (push-tap fast path).
+    url.search = new URLSearchParams({ session: event.sessionId, cwd: event.cwd, view: "chat" }).toString();
     const data: Record<string, string> = {
       conversationId: event.sessionId,
       title: "Task finished",

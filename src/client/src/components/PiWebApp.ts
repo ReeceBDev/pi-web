@@ -6,6 +6,7 @@ import { configApi, effectiveWorkspaceAttachmentsFolder, effectiveWorkspaceUploa
 import type { AppAction } from "../actions";
 import { initialAppState, type AppState, type ModelDialogOrigin } from "../appState";
 import { browserErrorContext, browserErrorScopeKey, BrowserErrorReporter, clearBrowserError, machineBrowserErrorScope, visibleBrowserErrors, workspaceBrowserErrorScope, type BrowserError, type BrowserErrorScope } from "../browserErrors";
+import { prefetchDeepLinkChatHistory } from "../chatDeepLinkPrefetch";
 import { isSessionActive } from "../../../shared/activity";
 import { workspaceDeleteOperation } from "../../../shared/workspaceDeletion";
 import { PI_WEB_CAPABILITIES, supportsPiWebCapability } from "../../../shared/capabilities";
@@ -521,6 +522,9 @@ export class PiWebApp extends LitElement {
 
   private async loadProjectsAndRestoreRoute() {
     this.restoreSettingsRoute();
+    // Fire-and-forget: a box-launcher push tap boots with ?session=S&cwd=W and
+    // the transcript fetch needs nothing else, so it races the catalog chain.
+    prefetchDeepLinkChatHistory();
     const route = readRoute();
     if (!await this.machines.loadMachines(route.machineId)) {
       this.setContentError(route, this.state.error);
