@@ -55,7 +55,6 @@ export class WorkspaceFileViewer extends LitElement {
    */
   private selectionToken = 0;
   private failedPreviewToken: number | undefined;
-  private htmlPreview: { key: string; urls: { frame: string; open: string } } | undefined;
   private customPreview: TemplateResult | undefined;
   private rendererId: string | undefined;
   private preference: WorkspaceFileViewMode | undefined;
@@ -149,7 +148,7 @@ export class WorkspaceFileViewer extends LitElement {
           ${canOpen ? html`
             <a
               class="viewer-action"
-              href=${workspaceFilePreviewKind(file) === "html" ? this.htmlPreviewUrls(file).open : openUrl}
+              href=${openUrl}
               target="_blank"
               rel="noopener noreferrer"
               referrerpolicy="no-referrer"
@@ -239,13 +238,17 @@ export class WorkspaceFileViewer extends LitElement {
     if (file.size > this.maxInlinePreviewBytes) return this.renderPreviewTooLarge(file);
     if (this.failedPreviewToken === token) return this.renderPreviewFailure(file, token);
     if (kind === "html") {
-      const { frame } = this.htmlPreviewUrls(file);
+      // rbowen: frame and Open both use the server preview URL. Blob URLs broke
+      // on his Android Chrome — the opaque-origin iframe could not resolve the
+      // app-created blob, and a top-level blob tab downloaded as a generic
+      // .bin. The server response carries the sandbox CSP (opaque origin,
+      // script-src 'none'), so isolation holds without a client blob; live
+      // scripts in the preview are the known ceiling.
       return html`
         ${file.truncated ? html`<p class="preview-note" role="status">Preview is rendered from truncated source. Use Download for the complete file.</p>` : null}
         <iframe
           class="file-frame-preview"
-          src=${frame}
-          sandbox="allow-scripts"
+          src=${this.previewUrl(file)}
           allow=""
           referrerpolicy="no-referrer"
           title=${`Preview of ${file.path}`}
@@ -265,45 +268,6 @@ export class WorkspaceFileViewer extends LitElement {
         @error=${() => { this.recordPreviewFailure(token); }}
       ></iframe>
     `;
-  }
-
-  /**
-   * Blob URLs for the live HTML preview, cached per selection and revoked when
-   * the selection or the element goes away. `file.content` is authoritative
-   * here: inline HTML reads always carry the source text.
-   *
-   * The frame blob keeps the document in an opaque origin (`sandbox="allow-scripts"`
-   * without `allow-same-origin`): script and CDN assets run, but the document
-   * cannot read the PI WEB origin — fetches are CORS-denied and there are no
-   * credentials to attach. Relative sibling files are the known ceiling (there
-   * is no base URL in an opaque-origin blob); serve multi-file pages through a
-   * dedicated same-site file origin if that ever matters.
-   */
-  private htmlPreviewUrls(file: FileContentResponse): { frame: string; open: string } {
-    const key = this.activeFileKey ?? "";
-    if (this.htmlPreview?.key === key) return this.htmlPreview.urls;
-    this.revokeHtmlPreview();
-    const bytes = new TextEncoder().encode(file.content);
-    const frame = URL.createObjectURL(new Blob([bytes], { type: "text/html" }));
-    // Top-level blob documents inherit the app origin, so the standalone
-    // window wraps the live document in its own opaque-origin sandbox; the
-    // wrapper itself carries no script.
-    const wrapper = `<!doctype html><meta charset="utf-8"><title>${escapeHtml(workspaceFileName(file.path))}</title><style>html,body{margin:0;height:100%}iframe{border:0;width:100%;height:100%}</style><iframe sandbox="allow-scripts" src="${frame}" title="${escapeHtml(file.path)}"></iframe>`;
-    const open = URL.createObjectURL(new Blob([wrapper], { type: "text/html" }));
-    this.htmlPreview = { key, urls: { frame, open } };
-    return this.htmlPreview.urls;
-  }
-
-  private revokeHtmlPreview(): void {
-    if (this.htmlPreview === undefined) return;
-    URL.revokeObjectURL(this.htmlPreview.urls.frame);
-    URL.revokeObjectURL(this.htmlPreview.urls.open);
-    this.htmlPreview = undefined;
-  }
-
-  override disconnectedCallback(): void {
-    this.revokeHtmlPreview();
-    super.disconnectedCallback();
   }
 
   private renderPreviewFailure(file: FileContentResponse, token: number): TemplateResult {
@@ -482,11 +446,6 @@ function hasRawAndPreviewModes(file: FileContentResponse, kind: WorkspaceFilePre
  */
 export function defaultViewModeFor(file: FileContentResponse, automaticRenderer = false): WorkspaceFileViewMode {
   return workspaceFilePreviewKind(file) === "html" || automaticRenderer ? "preview" : DEFAULT_WORKSPACE_FILE_VIEW_MODE;
-}
-
-/** Minimal attribute-safe escaping for the wrapper document's static markup. */
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/gu, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] ?? ch);
 }
 
 function isBrowserPreviewKind(kind: WorkspaceFilePreviewKind): kind is "image" | "html" | "pdf" {

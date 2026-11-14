@@ -242,7 +242,7 @@ describe("workspace-file-viewer", () => {
     expect(viewer.shadowRoot?.querySelector("a, iframe, pi-web-files-code-viewer")).toBeNull();
   });
 
-  it("opens HTML as a live sandboxed preview by default and falls back to raw source on request", async () => {
+  it("opens HTML through the sandboxed server preview URL by default and falls back to raw source on request", async () => {
     const source = `<h1 onclick="alert(1)">Literal heading</h1><script>alert("yes")</script>`;
     const file = textFile("pages/report.html", source, {
       mediaType: "html",
@@ -258,19 +258,23 @@ describe("workspace-file-viewer", () => {
     expect(modeButton(viewer, "Raw").getAttribute("aria-pressed")).toBe("false");
     expect(viewer.shadowRoot?.querySelector("pi-web-files-code-viewer")).toBeNull();
     const frame = requiredElement(viewer.shadowRoot?.querySelector<HTMLIFrameElement>("iframe"), "HTML preview frame");
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-    expect(frame.getAttribute("src")?.startsWith("blob:")).toBe(true);
+    // The server preview URL carries the sandbox CSP (opaque origin,
+    // script-src 'none'). Blob URLs are banned here: they fail to resolve on
+    // Android Chrome and download as generic .bin files.
+    expect(frame.getAttribute("sandbox")).toBeNull();
+    expect(frame.getAttribute("src")?.startsWith("blob:")).toBe(false);
+    expect(frame.getAttribute("src")).toContain("path=pages%2Freport.html");
     expect(frame.getAttribute("allow")).toBe("");
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
     expect(frame.getAttribute("title")).toBe("Preview of pages/report.html");
 
-    // The standalone window hands the same document a wrapper blob, not the
-    // server preview URL whose CSP would kill scripts.
+    // Open in a new window navigates to the same sandboxed server URL.
     const open = anchorWithText(viewer, "Open ↗");
     expect(open.getAttribute("target")).toBe("_blank");
     expect(open.getAttribute("rel")).toBe("noopener noreferrer");
     expect(open.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(open.href.startsWith("blob:")).toBe(true);
+    expect(open.href.startsWith("blob:")).toBe(false);
+    expect(open.href).toContain("path=pages%2Freport.html");
     const download = requiredElement(viewer.shadowRoot?.querySelector<HTMLAnchorElement>("a[download]"), "download action");
     expect(download.getAttribute("download")).toBe("report.html");
     expect(new URL(download.href).searchParams.get("download")).toBe("1");
