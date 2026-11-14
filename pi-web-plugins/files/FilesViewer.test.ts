@@ -287,6 +287,40 @@ describe("workspace-file-viewer", () => {
     expect(viewer.shadowRoot?.querySelector("h1, script")).toBeNull();
   });
 
+  it("downloads text files via a synchronous blob anchor so the browser keeps the real filename", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const originalCreateObjectURL = URL.createObjectURL.bind(URL);
+    const originalRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+    const blobs: Blob[] = [];
+    URL.createObjectURL = (blob: Blob) => { blobs.push(blob); return "blob:mock-0"; };
+    URL.revokeObjectURL = () => undefined;
+    try {
+      const file = textFile("pages/report.html", "<h1>report</h1>", { mediaType: "html", mimeType: "text/html; charset=utf-8" });
+      const viewer = await mountViewer(file, { modeStore: fakeModeStore(undefined) });
+      const download = anchorWithText(viewer, "Download");
+      download.dispatchEvent(new Event("click", { bubbles: true, cancelable: true }));
+      expect(blobs).toHaveLength(1);
+      expect(await blobs[0]?.text()).toBe("<h1>report</h1>");
+      expect(download.getAttribute("download")).toBe("report.html");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it.each(["binary", "truncated"] as const)("falls back to plain server navigation for %s files", async (kind) => {
+    const file = kind === "binary"
+      ? binaryFile("assets/logo.png", { mediaType: "image", mimeType: "image/png" })
+      : textFile("pages/big.log", "partial", { truncated: true });
+    const viewer = await mountViewer(file, { modeStore: fakeModeStore(undefined) });
+    const download = anchorWithText(viewer, "Download");
+    const event = new Event("click", { bubbles: true, cancelable: true });
+    download.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("opens Markdown as literal raw source and renders it through the safe renderer on request", async () => {
     const source = `# Rendered\n\n<script>alert(1)</script>\n\n![remote](https://attacker.test/pixel.png)\n\n[Docs](https://example.test/docs)`;
     const file = textFile("README.md", source, { mediaType: "markdown", language: "markdown" });

@@ -155,10 +155,30 @@ export class WorkspaceFileViewer extends LitElement {
               title="Open in new window"
             >Open ↗</a>
           ` : null}
-          <a class="viewer-action" href=${downloadUrl} download=${name} title=${`Download ${name}`}>Download</a>
+          <a class="viewer-action" href=${downloadUrl} download=${name} title=${`Download ${name}`} @click=${(event: Event) => { this.downloadFile(event, file); }}>Download</a>
         </div>
       </div>
     `;
+  }
+
+  // Android Chrome drops the user gesture across an await, then ignores
+  // anchor.download on the post-fetch click and names the file from the URL
+  // and MIME (preview.bin). Text files: build the blob synchronously from the
+  // content already in memory — no fetch, gesture intact, anchor.download
+  // honored. Binary and truncated files: plain anchor navigation, the server's
+  // Content-Disposition names the file.
+  private downloadFile(event: Event, file: FileContentResponse): void {
+    if (file.binary || file.truncated) return;
+    event.preventDefault();
+    const blob = new Blob([file.content], { type: file.mimeType ?? "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = workspaceFileName(file.path);
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => { URL.revokeObjectURL(url); }, 30_000);
   }
 
   private renderRendererChooser(token: number): TemplateResult | null {
@@ -290,7 +310,7 @@ export class WorkspaceFileViewer extends LitElement {
     return html`
       <div class="preview-state">
         <p>Preview isn't available for this file type.</p>
-        <a class="download-link" href=${href} download=${name}>Download ${name} · ${formatFileSize(file.size)}</a>
+        <a class="download-link" href=${href} download=${name} @click=${(event: Event) => { this.downloadFile(event, file); }}>Download ${name} · ${formatFileSize(file.size)}</a>
       </div>
     `;
   }
