@@ -42,7 +42,10 @@ export function toggleCollapsedNavigationSection(collapsedSections: readonly Nav
 }
 
 export function nextNavigationSection(section: NavigationSection): NavigationSection | undefined {
-  return NAVIGATION_SECTION_ORDER[NAVIGATION_SECTION_ORDER.indexOf(section) + 1];
+  const next = NAVIGATION_SECTION_ORDER[NAVIGATION_SECTION_ORDER.indexOf(section) + 1];
+  // The Workspaces section renders in no panel anymore; advancing into it on
+  // mobile collapses every rendered section (rbowen sessions-collapse).
+  return next === "workspaces" ? nextNavigationSection(next) : next;
 }
 
 export class NavigationSectionsController implements ReactiveController {

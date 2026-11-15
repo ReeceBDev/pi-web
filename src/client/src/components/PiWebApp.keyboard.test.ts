@@ -231,7 +231,7 @@ describe("PiWebApp prompt focus and chat scroll on view switch", () => {
     expect(restoreScrollPosition).not.toHaveBeenCalled();
   });
 
-  it("focuses workspaces after project selection on mobile and desktop", () => {
+  it("focuses sessions after project selection on mobile and desktop (rbowen sessions-collapse: workspaces renders nowhere)", () => {
     const project = testProject("p1");
 
     const mobileApp = new PiWebApp();
@@ -239,14 +239,14 @@ describe("PiWebApp prompt focus and chat scroll on view switch", () => {
     const mobileSelect = stubSelectNavigationItem(mobileApp);
     navigationActionsOf(mobileApp).selectProject(project);
     expect(mobileSelect.mock.calls[0]?.[0]).toBe("projects");
-    expect(mobileSelect.mock.calls[0]?.[1]).toBe("workspaces");
+    expect(mobileSelect.mock.calls[0]?.[1]).toBe("sessions");
 
     const desktopApp = new PiWebApp();
     appShellLayout(desktopApp).isMobileNavigationLayout = false;
     const desktopSelect = stubSelectNavigationItem(desktopApp);
     navigationActionsOf(desktopApp).selectProject(project);
     expect(desktopSelect.mock.calls[0]?.[0]).toBe("projects");
-    expect(desktopSelect.mock.calls[0]?.[1]).toBe("workspaces");
+    expect(desktopSelect.mock.calls[0]?.[1]).toBe("sessions");
   });
 });
 

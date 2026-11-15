@@ -1897,7 +1897,7 @@ export class PiWebApp extends LitElement {
     showActions: () => { this.setState({ actionPaletteOpen: true }); },
     toggleProjects: () => { this.navigationSections.toggle("projects"); },
     toggleSessions: () => { this.navigationSections.toggle("sessions"); },
-    selectProject: (project: Project) => this.selectNavigationItem("projects", "workspaces", () => this.selectProjectFromNavigation(project)),
+    selectProject: (project: Project) => this.selectNavigationItem("projects", "sessions", () => this.selectProjectFromNavigation(project)),
     closeProject: (project: Project) => this.projects.closeProject(project.id),
     archivedCollapsed: () => { void this.sessions.clearSelectionAfterArchivedCollapse(); },
     startSession: () => this.startSessionFromNavigation(),

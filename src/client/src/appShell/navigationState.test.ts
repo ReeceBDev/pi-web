@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultNavigationSection, expandedNavigationSection, isNavigationSectionCollapsed, toggleCollapsedNavigationSection, toggleNavigationSection } from "./navigationState";
+import { defaultNavigationSection, expandedNavigationSection, isNavigationSectionCollapsed, nextNavigationSection, toggleCollapsedNavigationSection, toggleNavigationSection } from "./navigationState";
 
 describe("navigationState", () => {
   it("defaults to the first incomplete selection section", () => {
@@ -14,6 +14,12 @@ describe("navigationState", () => {
     expect(expandedNavigationSection(undefined, state)).toBe("workspaces");
     expect(expandedNavigationSection("sessions", state)).toBe("sessions");
     expect(expandedNavigationSection("none", state)).toBeUndefined();
+  });
+
+  it("advancing skips the removed workspaces section so mobile selection lands on sessions (rbowen sessions-collapse)", () => {
+    expect(nextNavigationSection("machines")).toBe("projects");
+    expect(nextNavigationSection("projects")).toBe("sessions");
+    expect(nextNavigationSection("sessions")).toBeUndefined();
   });
 
   it("uses the mobile accordion state on mobile layouts", () => {
