@@ -316,6 +316,8 @@ export class PiWebApp extends LitElement {
   private readonly machinePluginLoadPromises = new Map<string, Promise<void>>();
   private gatewayPluginLoadPromise: Promise<void> | undefined;
   private gatewayPluginLoadAttemptComplete = false;
+  private gatewayPluginRetryAttempts = 0;
+  private gatewayPluginRetryTimer: number | undefined;
   private themePreference: ThemePreference = readStoredThemePreference() ?? DEFAULT_THEME_PREFERENCE;
   @state() private activeThemeId: QualifiedContributionId = CLASSIC_THEME_ID;
   @state() private isRefreshingApp = false;
@@ -490,6 +492,8 @@ export class PiWebApp extends LitElement {
     this.piWebStatusTimer = undefined;
     if (this.selectedSessionRefreshTimer !== undefined) window.clearTimeout(this.selectedSessionRefreshTimer);
     this.selectedSessionRefreshTimer = undefined;
+    if (this.gatewayPluginRetryTimer !== undefined) window.clearTimeout(this.gatewayPluginRetryTimer);
+    this.gatewayPluginRetryTimer = undefined;
     this.clearScheduledPiWebStatusRefresh();
     this.cancelWorkspaceDeletionRefresh();
     this.clearPendingRemoteRouteRestore();
@@ -2496,7 +2500,24 @@ export class PiWebApp extends LitElement {
     this.gatewayPluginLoadAttemptComplete = false;
     const load = this.builtInPluginsReady.then(() => this.loadExternalPlugins()).then((complete) => {
       this.gatewayPluginLoadAttemptComplete = true;
-      if (!complete && this.gatewayPluginLoadPromise === load) this.gatewayPluginLoadPromise = undefined;
+      if (complete) {
+        this.gatewayPluginRetryAttempts = 0;
+        return;
+      }
+      if (this.gatewayPluginLoadPromise !== load) return;
+      this.gatewayPluginLoadPromise = undefined;
+      // rbowen (tasks-tab-collapse): a failed plugin load deletes the verified
+      // plugin mode and the terminal composition, so every tab-strip render
+      // collapses to the core Files tab until some later navigation happens to
+      // retry the load. Retry on a bounded backoff instead of leaving the
+      // collapsed strip stuck until the user interacts; each success ends in
+      // invalidateWorkspaceSurface(), which re-renders the strip with all tabs.
+      if (this.gatewayPluginRetryTimer !== undefined || this.gatewayPluginRetryAttempts >= 5) return;
+      this.gatewayPluginRetryAttempts += 1;
+      this.gatewayPluginRetryTimer = window.setTimeout(() => {
+        this.gatewayPluginRetryTimer = undefined;
+        if (this.gatewayPluginLoadPromise === undefined) void this.ensureGatewayPluginsLoaded();
+      }, 2000 * this.gatewayPluginRetryAttempts);
     });
     this.gatewayPluginLoadPromise = load;
     return load;

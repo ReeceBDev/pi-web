@@ -3070,6 +3070,44 @@ describe("PiWebApp plugin host", () => {
     );
   });
 
+  it("retries a failed gateway plugin load automatically and restores the plugin mode (rbowen tasks-tab-collapse)", async () => {
+    vi.useFakeTimers();
+    const app = createApp();
+    stubPluginLoadRendering(app);
+    const retryPlugin = pluginWithAction("Retry", "act");
+    const transientFailure = new Error("temporary module failure");
+    let attempt = 0;
+    vi.mocked(loadExternalPlugins).mockImplementation(() => {
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(transientFailure);
+      return Promise.resolve({
+        terminalMode: "recovery-disabled",
+        declarations: [{ id: "retry", machineSpecific: false }],
+        registrations: [{ id: "retry", machineSpecific: false, plugin: retryPlugin }],
+        failures: [],
+      });
+    });
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await ensureGatewayPluginsLoaded(app);
+
+    // First attempt failed: the load promise is reset for retry and the
+    // verified plugin mode is unset (non-core tab contributions unavailable).
+    expect(Reflect.get(app, "gatewayPluginLoadPromise")).toBeUndefined();
+    expect(loadExternalPlugins).toHaveBeenCalledTimes(1);
+    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Reflect.get cannot preserve the private map's value type.
+    const modes = Reflect.get(app, "verifiedPluginModeByMachine") as Map<string, string>;
+    expect(modes.get("local")).toBeUndefined();
+
+    // The automatic backoff retry runs without any navigation.
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(loadExternalPlugins).toHaveBeenCalledTimes(2);
+    expect(appPluginRegistry(app).hasPlugin("retry")).toBe(true);
+    expect(modes.get("local")).toBe("recovery-disabled");
+    expect(warning).toHaveBeenCalledWith("Failed to load PI WEB plugins", transientFailure);
+  });
+
   it("completes workspace-removal polling when the deleted target no longer resolves", async () => {
     const commandWorkspace: Workspace = { ...workspace, id: "workspace-command", path: "/repo", label: "main", isMain: true };
     const targetWorkspace: Workspace = { ...workspace, id: "workspace-target", path: "/repo-target", label: "target", isMain: false };
