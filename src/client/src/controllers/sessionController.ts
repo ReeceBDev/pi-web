@@ -3,6 +3,7 @@ import type { AppState, ClosedExtensionDialog } from "../appState";
 import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorScope, type SessionBrowserErrorOwner } from "../browserErrors";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
 import { textMessage } from "../chatMessages";
+import type { ChatLine } from "../components/shared";
 import { machineSessionKey } from "../machineKeys";
 import { isCreatingSessionId } from "../route";
 import { clearDraft, moveDraft, saveDraft } from "../promptDraftStorage";
@@ -107,6 +108,12 @@ interface PendingSessionStart {
   session: ClientPendingStartSessionInfo;
   queuedSends: QueuedPendingSessionSend[];
   discarded: boolean;
+  /** Pipeline launch mode: no backend session is ever created; the first
+   * prompt send POSTs /api/pipeline-runs instead. */
+  pipeline?: boolean;
+  /** Set while a pipeline run launch request is in flight (or succeeded, so
+   * later sends only queue); reset on failure so the next send retries. */
+  pipelineLaunchAttempted?: boolean;
   /**
    * The real session id, learned from the daemon's `session.startup` events
    * long before the create request resolves. It is what lets the startup view
@@ -264,14 +271,24 @@ export class SessionController {
     await this.clearSessionAfterNavigation(this.navigationSelection());
   }
 
-  async startSession(options?: { updateUrl?: boolean | undefined; cwd?: string | undefined; plain?: boolean }) {
-    const workspace = await this.workspaceForNewSession(options?.cwd, options?.plain === true);
-    if (!workspace) return;
+  async startSession(options?: { updateUrl?: boolean | undefined; cwd?: string | undefined; plain?: boolean; pipeline?: boolean }) {
     const machineId = selectedMachineId(this.getState());
-    const pendingUrlPublished = options?.updateUrl !== false;
+    // Pipeline launches are machine-local only (same gate as the supervisor
+    // unit path); a remote-machine "+ New Work" keeps today's flow.
+    const pipeline = options?.pipeline === true && machineId === "local";
+    const workspace = await this.workspaceForNewSession(options?.cwd, options?.plain === true, pipeline);
+    if (!workspace) return;
+    const pendingUrlPublished = options?.updateUrl !== false && !pipeline;
     const pending = this.createPendingSessionStart(workspace, machineId, this.navigationSelection(), pendingUrlPublished);
+    if (pipeline) pending.pipeline = true;
     this.pendingSessionStarts.set(pending.tempId, pending);
     this.insertAndSelectPendingSession(pending.session, { updateUrl: options?.updateUrl });
+    if (pipeline) {
+      // Pipeline rows exist client-side only: no backend session is created,
+      // so nothing is cached or handed off — the row is ephemeral launch UI
+      // and disappears on reload. The first send launches the run.
+      return;
+    }
     // Persist the row before the backend answers: a reload mid-start (mobile tab
     // discard) otherwise loses the session entirely — the client never learned
     // its id and empty sessions are invisible to server listings.
@@ -302,15 +319,17 @@ export class SessionController {
    * (session supervisor create) so the new chat runs in the unit's primary
    * worktree. Supervisor failures fall back to the plain local session. The
    * path swap happens before the pending start so selection, navigation, and
-   * queued sends all target the unit workspace from the first published row. */
-  private async workspaceForNewSession(cwd: string | undefined, plain: boolean): Promise<Workspace | undefined> {
+   * queued sends all target the unit workspace from the first published row.
+   * Pipeline launches skip the supervisor entirely: the chat row opens on the
+   * repo workspace and the run is launched on the first send. */
+  private async workspaceForNewSession(cwd: string | undefined, plain: boolean, pipeline: boolean): Promise<Workspace | undefined> {
     const state = this.getState();
     const listed = cwd === undefined
       ? state.selectedWorkspace
       : listedWorkspaceForPath(state, cwd) ?? shellWorkspaceForPath(state.selectedWorkspace, cwd);
     if (!listed) return undefined;
     const machineId = selectedMachineId(state);
-    if (plain || machineId !== "local" || isUnitWorktreePath(listed.path)) return listed;
+    if (plain || pipeline || machineId !== "local" || isUnitWorktreePath(listed.path)) return listed;
     try {
       const unit = await this.api.supervisorUnit(listed.path);
       if (unit.unit !== undefined) return listed;
@@ -530,6 +549,7 @@ export class SessionController {
     }
     const queued: QueuedPendingSessionSend = { ...input, id: `pending-send-${String(++this.pendingQueuedSendSeq)}` };
     pending.queuedSends.push(queued);
+    if (pending.pipeline === true) this.maybeLaunchPipelineRun(pending, queued);
     const state = this.getState();
     const current = state.clientQueuedSessionMessages[session.id] ?? [];
     const activity = creatingPendingSessionActivity(session.id, pending.queuedSends.length);
@@ -539,6 +559,44 @@ export class SessionController {
       activity: state.selectedSession?.id === session.id ? activity : state.activity,
       error: "",
     });
+  }
+
+  /** Launch the pipeline run for a pending row's first prompt send. The
+   * message is NOT prompt-fed into any backing session; the run ack (or
+   * failure) renders as a system note in the open chat. */
+  private maybeLaunchPipelineRun(pending: PendingSessionStart, queued: QueuedPendingSessionSend): void {
+    if (queued.type !== "prompt" || pending.pipelineLaunchAttempted === true) return;
+    pending.pipelineLaunchAttempted = true;
+    void this.launchPipelineRun(pending, queued);
+  }
+
+  private async launchPipelineRun(pending: PendingSessionStart, queued: QueuedPendingSessionSend): Promise<void> {
+    const text = queued.type === "prompt" ? queued.text : "";
+    this.appendPipelineLines(pending, [textMessage("user", text)]);
+    let launched = false;
+    let line: ChatLine;
+    try {
+      const result = await this.api.pipelineRun(pending.cwd, text);
+      launched = result.ok;
+      line = result.ok
+        ? textMessage("system", `Pipeline run started · ${result.projectRunId}`)
+        : textMessage("system", `Pipeline run failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
+    } catch (error) {
+      line = textMessage("system", `Pipeline run failed · ${errorMessage(error)}`);
+    }
+    if (!launched) pending.pipelineLaunchAttempted = false;
+    const index = pending.queuedSends.indexOf(queued);
+    if (index >= 0) pending.queuedSends.splice(index, 1);
+    this.dropNextQueuedSessionMessage(pending.tempId);
+    this.appendPipelineLines(pending, [line]);
+  }
+
+  /** Show lines in the open chat of a pipeline pending row. The row has no
+   * backend transcript, so lines live only in the selected-session state. */
+  private appendPipelineLines(pending: PendingSessionStart, lines: ChatLine[]): void {
+    if (pending.discarded) return;
+    if (this.getState().selectedSession?.id !== pending.tempId) return;
+    this.setState({ messages: [...this.getState().messages, ...lines] });
   }
 
   private async flushQueuedPendingSends(session: SessionInfo, machineId: string, queuedSends: readonly QueuedPendingSessionSend[], errorOwner: SessionBrowserErrorOwner): Promise<void> {

@@ -2029,7 +2029,10 @@ export class PiWebApp extends LitElement {
     const machineId = selectedMachineId(this.state);
     if (isCurrent()) await this.focusChatComposer(isCurrent);
     if (!isCurrent()) return;
-    const start = this.sessions.startSession({ cwd: path, plain }).catch((error: unknown) => {
+    // "+ New Work" (no explicit path, not the non-sandboxed variant) opens the
+    // chat row instantly on the repo workspace and launches a pipeline run on
+    // the first message instead of creating a supervisor unit.
+    const start = this.sessions.startSession({ cwd: path, plain, pipeline: !plain && path === undefined }).catch((error: unknown) => {
       if (workspace === undefined) return;
       this.browserErrors.report(workspaceBrowserErrorScope(machineId, workspace.projectId, workspace.id), String(error));
     });

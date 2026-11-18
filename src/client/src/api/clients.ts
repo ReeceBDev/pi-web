@@ -27,6 +27,7 @@ import {
   parseSessionModelCatalogResponse,
   parseMoveWorkspaceFileResponse,
   parseOAuthFlowState,
+  parsePipelineRunAck,
   parsePiPackageMutationResponse,
   parsePiPackagesResponse,
   parsePiWebConfigResponse,
@@ -391,6 +392,11 @@ export const supervisorApi = {
   supervisorAddWorktree: (cwd: string) => request("api/supervisor/worktree", parseSupervisorWorktreeCreated, { method: "POST", body: JSON.stringify({ cwd }) }),
 } as const;
 
+export const pipelineApi = {
+  /** Launch a pipeline run on a repo workspace (machine-local only). */
+  pipelineRun: (repoPath: string, goal: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ repoPath, goal }) }),
+} as const;
+
 export const api = {
   ...piWebApi,
   ...machinesApi,
@@ -404,5 +410,6 @@ export const api = {
   ...filesApi,
   ...trustApi,
   ...supervisorApi,
+  ...pipelineApi,
 
 };

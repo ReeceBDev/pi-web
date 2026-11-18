@@ -41,6 +41,8 @@ import { MachineService } from "./machines/machineService.js";
 import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerSupervisorRoutes } from "./machines/supervisorRoutes.js";
 import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
+import { registerPipelineRoutes } from "./machines/pipelineRoutes.js";
+import type { PipelineRunDelegate } from "./machines/pipelineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
 import { registerPluginBackendChannelProxyRoutes } from "./plugins/pluginBackendChannelProxyRoutes.js";
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
@@ -54,6 +56,8 @@ export interface AppDependencies {
   machines?: MachineService;
   /** Session supervisor proxy target; tests inject a fake client. */
   unitSupervisor?: UnitSupervisorDelegate;
+  /** Pipeline run launch target; tests inject a stubbed CLI client. */
+  pipelineRunner?: PipelineRunDelegate;
   sessionDaemon?: SessionProxyDaemon;
   agentProfileProvider?: ActiveAgentProfileProvider;
   piWebPlugins?: Pick<PiWebPluginService, "manifest" | "plugins" | "readAsset">;
@@ -290,6 +294,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerMachineRoutes(app, machines);
   registerMachinePluginProxyRoutes(app, machines);
   registerSupervisorRoutes(app, deps.unitSupervisor);
+  registerPipelineRoutes(app, deps.pipelineRunner);
 
   registerLocalProjectRoutes(app, projects, workspaces, "/api", { config: configService, sessionDaemon });
   registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService, sessionDaemon });

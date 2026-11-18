@@ -2140,6 +2140,18 @@ export function parseSupervisorWorktreeCreated(value: unknown): { worktreePath: 
   return { worktreePath: requireString(record, "worktreePath") };
 }
 
+export type PipelineRunAck = { ok: true; projectRunId: string } | { ok: false; reason: string; detail: string };
+
+export function parsePipelineRunAck(value: unknown): PipelineRunAck {
+  if (!isRecord(value)) throw new Error("Invalid PI WEB pipeline run response");
+  if (value["ok"] === true && typeof value["projectRunId"] === "string") return { ok: true, projectRunId: value["projectRunId"] };
+  return {
+    ok: false,
+    reason: typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
+    detail: typeof value["detail"] === "string" ? value["detail"] : "",
+  };
+}
+
 function optionalBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   const value = record[key];
   if (value === undefined) return undefined;
