@@ -114,6 +114,9 @@ interface PendingSessionStart {
   /** Set while a pipeline run launch request is in flight (or succeeded, so
    * later sends only queue); reset on failure so the next send retries. */
   pipelineLaunchAttempted?: boolean;
+  /** The launched pipeline run's id, learned from the launch ack; the target
+   * for the status / approve / revise chat commands. */
+  pipelineRunId?: string;
   /**
    * The real session id, learned from the daemon's `session.startup` events
    * long before the create request resolves. It is what lets the startup view
@@ -548,6 +551,13 @@ export class SessionController {
       return;
     }
     const queued: QueuedPendingSessionSend = { ...input, id: `pending-send-${String(++this.pendingQueuedSendSeq)}` };
+    const pipelineCommand = pending.pipeline === true && pending.pipelineLaunchAttempted === true ? pipelineCommandOf(queued) : undefined;
+    if (pipelineCommand !== undefined) {
+      // A launched pipeline row has no backend transcript to receive prompts;
+      // status / approve / revise drive the run instead of queueing.
+      void this.runPipelineCommand(pending, queued, pipelineCommand);
+      return;
+    }
     pending.queuedSends.push(queued);
     if (pending.pipeline === true) this.maybeLaunchPipelineRun(pending, queued);
     const state = this.getState();
@@ -578,8 +588,9 @@ export class SessionController {
     try {
       const result = await this.api.pipelineRun(pending.cwd, text);
       launched = result.ok;
+      if (result.ok) pending.pipelineRunId = result.projectRunId;
       line = result.ok
-        ? textMessage("system", `Pipeline run started · ${result.projectRunId}`)
+        ? textMessage("system", `Pipeline run started · ${result.projectRunId} · send status / approve / revise to drive it`)
         : textMessage("system", `Pipeline run failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
     } catch (error) {
       line = textMessage("system", `Pipeline run failed · ${errorMessage(error)}`);
@@ -597,6 +608,37 @@ export class SessionController {
     if (pending.discarded) return;
     if (this.getState().selectedSession?.id !== pending.tempId) return;
     this.setState({ messages: [...this.getState().messages, ...lines] });
+  }
+
+  /** One-shot status / approve / revise against the launched run. The command
+   * itself is never queued; its result renders as a system note. */
+  private async runPipelineCommand(pending: PendingSessionStart, queued: QueuedPendingSessionSend, command: "status" | "approve" | "revise"): Promise<void> {
+    const text = queued.type === "prompt" ? queued.text : "";
+    const runId = pending.pipelineRunId;
+    this.appendPipelineLines(pending, [textMessage("user", text)]);
+    let line: ChatLine;
+    if (runId === undefined) {
+      line = textMessage("system", "Pipeline command failed · no run id recorded for this chat");
+    } else if (command === "status") {
+      try {
+        const result = await this.api.pipelineRunStatus(runId);
+        line = result.ok
+          ? textMessage("system", `Pipeline status · ${runId} · ${pipelineStatusSummary(result.view)}`)
+          : textMessage("system", `Pipeline status failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
+      } catch (error) {
+        line = textMessage("system", `Pipeline status failed · ${errorMessage(error)}`);
+      }
+    } else {
+      try {
+        const result = await this.api.pipelineRunDecision(runId, command);
+        line = result.ok
+          ? textMessage("system", `Pipeline decision accepted · ${pipelineDecisionSummary(result.receipt)}`)
+          : textMessage("system", `Pipeline decision failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
+      } catch (error) {
+        line = textMessage("system", `Pipeline decision failed · ${errorMessage(error)}`);
+      }
+    }
+    this.appendPipelineLines(pending, [line]);
   }
 
   private async flushQueuedPendingSends(session: SessionInfo, machineId: string, queuedSends: readonly QueuedPendingSessionSend[], errorOwner: SessionBrowserErrorOwner): Promise<void> {
@@ -2539,3 +2581,46 @@ function isSessionNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.toLowerCase().includes("session not found");
 }
 
+
+/** Map a queued prompt send to a pipeline command, or undefined when the
+ * text is not one. Only consulted after the run launch was attempted. */
+function pipelineCommandOf(queued: QueuedPendingSessionSend): "status" | "approve" | "revise" | undefined {
+  if (queued.type !== "prompt") return undefined;
+  const text = queued.text.trim().toLowerCase();
+  if (text === "status" || text === "run status") return "status";
+  if (text === "approve") return "approve";
+  if (text === "revise") return "revise";
+  return undefined;
+}
+
+/** Human line for the run-status CLI view: live phase (+ card revision) or
+ * the terminal close status. */
+function pipelineStatusSummary(view: Record<string, unknown>): string {
+  const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
+  const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : undefined;
+  const card = optionalPipelineRecord(view, "card");
+  const revision = card !== undefined && typeof card["revision"] === "number" ? ` · card rev ${String(card["revision"])}` : "";
+  return `${phase}${closeStatus === undefined ? "" : ` (${closeStatus})`}${revision}`;
+}
+
+/** The optional Record-valued field of a response payload, or undefined. */
+function optionalPipelineRecord(payload: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = payload[key];
+  return isPlainPipelineRecord(value) ? value : undefined;
+}
+
+function isPlainPipelineRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Human line for an approval receipt (accepted or rejected). */
+function pipelineDecisionSummary(receipt: Record<string, unknown>): string {
+  if (receipt["accepted"] === true) {
+    const decision = typeof receipt["decision"] === "string" ? receipt["decision"] : "decision";
+    const decisionId = typeof receipt["decisionId"] === "string" ? receipt["decisionId"] : "";
+    return `${decision} · ${decisionId}`;
+  }
+  const reason = typeof receipt["reason"] === "string" ? receipt["reason"] : "rejected";
+  const detail = typeof receipt["detail"] === "string" ? receipt["detail"] : "";
+  return `rejected · ${reason}${detail === "" ? "" : ` · ${detail}`}`;
+}

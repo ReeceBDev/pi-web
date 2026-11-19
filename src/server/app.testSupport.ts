@@ -11,7 +11,7 @@ import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import type { MachineClient } from "./machines/machineClient.js";
 import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
-import type { PipelineRunDelegate } from "./machines/pipelineRoutes.js";
+import type { PipelineDecisionDelegate, PipelineRunDelegate, PipelineStatusDelegate } from "./machines/pipelineRoutes.js";
 import { MachineService } from "./machines/machineService.js";
 import { MachineStore } from "./machines/machineStore.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
@@ -27,6 +27,7 @@ interface AppTestContext {
   remoteClient: MachineClient | undefined;
   unitSupervisor: UnitSupervisorDelegate | undefined;
   pipelineRunner: PipelineRunDelegate | undefined;
+  pipelineCommands: (PipelineStatusDelegate & PipelineDecisionDelegate) | undefined;
   readonly sessionDaemonRequests: CapturedSessionDaemonRequest[];
   readonly piPackageRequests: CapturedPiPackageRequest[];
   readonly workspaceCatalog: AppTestWorkspaceCatalog;
@@ -40,6 +41,7 @@ let projectDir: string | undefined;
 let remoteClient: MachineClient | undefined;
 let unitSupervisor: UnitSupervisorDelegate | undefined;
 let pipelineRunner: PipelineRunDelegate | undefined;
+let pipelineCommands: (PipelineStatusDelegate & PipelineDecisionDelegate) | undefined;
 let sessionDaemonRequests: CapturedSessionDaemonRequest[] = [];
 let piPackageRequests: CapturedPiPackageRequest[] = [];
 let workspaceCatalog: AppTestWorkspaceCatalog | undefined;
@@ -77,6 +79,12 @@ export const appTestContext: AppTestContext = {
   set pipelineRunner(client) {
     pipelineRunner = client;
   },
+  get pipelineCommands() {
+    return pipelineCommands;
+  },
+  set pipelineCommands(client) {
+    pipelineCommands = client;
+  },
   get sessionDaemonRequests() {
     return sessionDaemonRequests;
   },
@@ -108,6 +116,7 @@ export function registerAppTestHooks(): void {
     remoteClient = undefined;
     unitSupervisor = undefined;
     pipelineRunner = undefined;
+    pipelineCommands = undefined;
     sessionDaemonRequests = [];
     piPackageRequests = [];
     piWebConfig = {};
@@ -120,6 +129,7 @@ export function registerAppTestHooks(): void {
       workspaceCatalog,
       unitSupervisor: delegatingUnitSupervisor(),
       pipelineRunner: delegatingPipelineRunner(),
+      pipelineCommands: delegatingPipelineCommands(),
       machines: new MachineService(new MachineStore(join(tempDir, "machines.json")), {
         remoteClientFactory: () => {
           if (remoteClient === undefined) throw new Error("No remote machine client configured");
@@ -203,6 +213,17 @@ function delegatingPipelineRunner(): PipelineRunDelegate {
     return pipelineRunner;
   };
   return { run: (request) => delegate().run(request) };
+}
+
+function delegatingPipelineCommands(): PipelineStatusDelegate & PipelineDecisionDelegate {
+  const delegate = (): PipelineStatusDelegate & PipelineDecisionDelegate => {
+    if (pipelineCommands === undefined) throw new Error("No pipeline command client configured");
+    return pipelineCommands;
+  };
+  return {
+    status: (runId) => delegate().status(runId),
+    decide: (runId, decision, actor) => delegate().decide(runId, decision, actor),
+  };
 }
 
 function fakePiWebPluginAsset(pluginId: string, assetPath: string): Promise<{ content: Buffer; contentType: string } | undefined> {

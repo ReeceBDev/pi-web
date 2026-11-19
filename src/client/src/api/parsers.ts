@@ -2152,6 +2152,40 @@ export function parsePipelineRunAck(value: unknown): PipelineRunAck {
   };
 }
 
+export type PipelineRunStatus = { ok: true; view: Record<string, unknown> } | { ok: false; reason: string; detail: string };
+
+export function parsePipelineRunStatus(value: unknown): PipelineRunStatus {
+  const view = isRecord(value) ? optionalRecord(value, "view") : undefined;
+  if (view !== undefined) return { ok: true, view };
+  return {
+    ok: false,
+    reason: isRecord(value) && typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
+    detail: isRecord(value) && typeof value["detail"] === "string" ? value["detail"] : "",
+  };
+}
+
+export type PipelineRunDecision = { ok: true; receipt: Record<string, unknown> } | { ok: false; reason: string; detail: string };
+
+export function parsePipelineRunDecision(value: unknown): PipelineRunDecision {
+  const receipt = isRecord(value) ? optionalRecord(value, "receipt") : undefined;
+  if (receipt !== undefined) return { ok: true, receipt };
+  return {
+    ok: false,
+    reason: isRecord(value) && typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
+    detail: isRecord(value) && typeof value["detail"] === "string" ? value["detail"] : "",
+  };
+}
+
+/** The optional Record-valued field of a response record, or undefined. */
+function optionalRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = record[key];
+  return isPlainRecord(value) ? value : undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function optionalBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   const value = record[key];
   if (value === undefined) return undefined;

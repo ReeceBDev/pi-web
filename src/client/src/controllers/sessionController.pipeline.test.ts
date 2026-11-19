@@ -68,9 +68,81 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(promptCalls).toEqual([]);
     expect(harness.state.messages.map((line) => `${line.role}:${line.parts[0]?.type === "text" ? line.parts[0].text : "?"}`)).toEqual([
       "user:Build the flinger fix",
-      "system:Pipeline run started · run-42",
+      "system:Pipeline run started · run-42 · send status / approve / revise to drive it",
     ]);
     expect(harness.state.clientQueuedSessionMessages[tempId ?? ""]).toBeUndefined();
+  });
+
+  it("answers a status command against the launched run without queueing", async () => {
+    const statusCalls: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
+      pipelineRunStatus: (runId) => {
+        statusCalls.push(runId);
+        return Promise.resolve({ ok: true, view: { phase: "AWAITING_SKETCH_APPROVAL", card: { revision: 2 } } });
+      },
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+
+    await harness.controller.startSession({ pipeline: true });
+    await flush();
+    await harness.controller.send("Build the flinger fix");
+    await flush();
+    await harness.controller.send("status");
+    await flush();
+
+    expect(statusCalls).toEqual(["run-42"]);
+    expect(harness.state.messages.map((line) => `${line.role}:${line.parts[0]?.type === "text" ? line.parts[0].text : "?"}`)).toEqual([
+      "user:Build the flinger fix",
+      "system:Pipeline run started · run-42 · send status / approve / revise to drive it",
+      "user:status",
+      "system:Pipeline status · run-42 · AWAITING_SKETCH_APPROVAL · card rev 2",
+    ]);
+    expect(harness.state.clientQueuedSessionMessages[harness.state.selectedSession?.id ?? ""]).toBeUndefined();
+  });
+
+  it("submits an approve decision and renders the receipt", async () => {
+    const decisions: [string, string][] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
+      pipelineRunDecision: (runId, decision) => {
+        decisions.push([runId, decision]);
+        return Promise.resolve({ ok: true, receipt: { accepted: true, decision, decisionId: "dec-approve-1-x" } });
+      },
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+
+    await harness.controller.startSession({ pipeline: true });
+    await flush();
+    await harness.controller.send("Build the flinger fix");
+    await flush();
+    await harness.controller.send("approve");
+    await flush();
+
+    expect(decisions).toEqual([["run-42", "approve"]]);
+    const lastNote = harness.state.messages.at(-1)?.parts[0];
+    expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline decision accepted · approve · dec-approve-1-x");
+  });
+
+  it("renders a typed decision failure (no open card)", async () => {
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
+      pipelineRunDecision: () => Promise.resolve({ ok: false, reason: "no-open-card", detail: "" }),
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+
+    await harness.controller.startSession({ pipeline: true });
+    await flush();
+    await harness.controller.send("Build the flinger fix");
+    await flush();
+    await harness.controller.send("revise");
+    await flush();
+
+    const lastNote = harness.state.messages.at(-1)?.parts[0];
+    expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline decision failed · no-open-card");
   });
 
   it("renders a failed launch and lets the next send retry", async () => {
@@ -99,7 +171,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
 
     expect(pipelineRunCalls).toBe(2);
     const lastNote = harness.state.messages.at(-1)?.parts[0];
-    expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline run started · run-7");
+    expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline run started · run-7 · send status / approve / revise to drive it");
   });
 
   it("keeps the plain (+ Non-Sandboxed) flow on the backend session path", async () => {
