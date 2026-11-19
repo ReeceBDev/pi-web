@@ -2,6 +2,7 @@ import { api as defaultApi, type Project, type Workspace } from "../api";
 import { resetWorkspaceScopedState, type AppState } from "../appState";
 import { BrowserErrorReporter, projectBrowserErrorScope, workspaceBrowserErrorScope } from "../browserErrors";
 import { mergeCachedNewSessions } from "../cachedNewSessions";
+import { mergePipelineRuns } from "../cachedPipelineRuns";
 import { machineProjectKey } from "../machineKeys";
 import { selectedMachineId, type GetState, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection, type RouteTarget, type SetState, type UpdateUrl } from "./types";
 import type { SessionController } from "./sessionController";
@@ -40,7 +41,7 @@ export class WorkspaceController {
     private readonly getState: GetState,
     private readonly setState: SetState,
     private readonly updateUrl: UpdateUrl,
-    private readonly sessions: Pick<SessionController, "clearActiveSession" | "preferredSession" | "selectSession">,
+    private readonly sessions: Pick<SessionController, "clearActiveSession" | "preferredSession" | "selectSession" | "registerRestoredPipelineStarts">,
     private readonly workspaceSelection: WorkspaceSelectionMemory = new InMemoryWorkspaceSelectionMemory(),
     deps: WorkspaceControllerDependencies = {},
   ) {
@@ -120,13 +121,18 @@ export class WorkspaceController {
           : await this.api.sessions(workspace.path, machineId, { signal: target.signal }));
       // mergeCachedNewSessions rewrites the cached-new-session storage; like the
       // fetch above, its effect must only survive alongside the state write that
-      // the guards below authorize. Run it after them.
+      // the guards below authorize. Run it after them. mergePipelineRuns adds
+      // rows for cached pipeline runs (write half dies with the page), so a
+      // reload of a workspace that launched a run restores its chat row on
+      // every path that builds the workspace listing — boot route restore
+      // included, not just refreshCurrentWorkspaceSessions.
       if (!this.navigationIsCurrent(navigation)
         || !workspaceMutationIsCurrent(target)
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedWorkspace?.id !== workspace.id
         || this.getState().selectedProject?.id !== workspace.projectId) return;
-      const sessions = mergeCachedNewSessions(workspace.path, loadedSessions, machineId);
+      const sessions = mergePipelineRuns(workspace.path, mergeCachedNewSessions(workspace.path, loadedSessions, machineId), machineId);
+      this.sessions.registerRestoredPipelineStarts(sessions, workspace, machineId);
       this.setState({
         sessions,
         // A fresh listing is newer than the catalog snapshot; write it back so

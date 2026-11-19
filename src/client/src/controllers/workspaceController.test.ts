@@ -4,6 +4,8 @@ import { initialAppState } from "../appState";
 import type { Machine, Project, SessionInfo, Workspace } from "../api";
 import { browserErrorScopeKey, projectBrowserErrorScope, workspaceBrowserErrorScope } from "../browserErrors";
 import type { SessionController } from "./sessionController";
+import { rememberPipelineRun, setPipelineRunStorageOverrideForTests } from "../cachedPipelineRuns";
+import { createMemoryStorage } from "../cachedNewSessions";
 import type { NavigationFreshness, NavigationScope } from "./types";
 import { WorkspaceController, type WorkspaceControllerDependencies } from "./workspaceController";
 
@@ -61,6 +63,8 @@ interface Harness {
   controller: WorkspaceController;
   state: () => AppState;
   clearActiveSession: ReturnType<typeof vi.fn>;
+  registerRestoredPipelineStarts: ReturnType<typeof vi.fn<(sessions: readonly SessionInfo[], workspace: Workspace, machineId: string) => void>>;
+  sessions: Pick<SessionController, "clearActiveSession" | "preferredSession" | "selectSession" | "registerRestoredPipelineStarts">;
   updateUrl: ReturnType<typeof vi.fn>;
   backgroundErrors: { message: string; error: unknown }[];
   setState: (patch: Partial<AppState>) => void;
@@ -79,10 +83,12 @@ function harness(
   let state: AppState = { ...initialAppState(), ...initial };
   const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
   const clearActiveSession = vi.fn();
-  const sessions: Pick<SessionController, "clearActiveSession" | "preferredSession" | "selectSession"> = {
+  const registerRestoredPipelineStarts = vi.fn<(sessions: readonly SessionInfo[], workspace: Workspace, machineId: string) => void>();
+  const sessions: Pick<SessionController, "clearActiveSession" | "preferredSession" | "selectSession" | "registerRestoredPipelineStarts"> = {
     clearActiveSession,
     preferredSession: vi.fn(),
     selectSession: vi.fn(),
+    registerRestoredPipelineStarts,
   };
   const updateUrl = vi.fn();
   const backgroundErrors: { message: string; error: unknown }[] = [];
@@ -103,11 +109,12 @@ function harness(
       topologyRefreshDebounceMs: options.topologyRefreshDebounceMs ?? 0,
     },
   );
-  return { controller, state: () => state, clearActiveSession, updateUrl, backgroundErrors, setState };
+  return { controller, state: () => state, clearActiveSession, registerRestoredPipelineStarts, sessions, updateUrl, backgroundErrors, setState };
 }
 
 afterEach(() => {
   vi.useRealTimers();
+  setPipelineRunStorageOverrideForTests(undefined);
 });
 
 describe("WorkspaceController route selection freshness", () => {
@@ -836,5 +843,25 @@ describe("WorkspaceController catalog caches", () => {
 
     expect(test.state().workspacesByProjectId).toEqual({ [remaining.id]: [workspace(remaining.id, remaining.path)] });
     expect(test.state().sessionsByWorkspacePath).toEqual({ [remaining.path]: [] });
+  });
+
+  it("restores cached pipeline run rows on workspace selection, including boot route restore", async () => {
+    const ws = workspace("p1", "/repo");
+    const storage = createMemoryStorage();
+    setPipelineRunStorageOverrideForTests(storage);
+    rememberPipelineRun({ runId: "run-77", cwd: ws.path, goal: "Build the flinger", created: "now", machineId: "local" }, storage);
+    const test = harness(
+      { selectedMachine: machine("local"), projects: [project("p1", "/repo")] },
+      vi.fn().mockResolvedValue([ws]),
+      { loadSessions: vi.fn().mockResolvedValue([]) },
+    );
+
+    await test.controller.selectProject({ id: "p1", name: "p1", path: "/repo", createdAt: "now" });
+
+    const restored = test.state().sessions.find((candidate) => candidate.id === "run-77");
+    expect(restored?.firstMessage).toBe("Build the flinger");
+    expect(restored?.cwd).toBe("/repo");
+    const registered = test.registerRestoredPipelineStarts.mock.calls.flatMap((call) => call[0]);
+    expect(registered.some((candidate) => candidate.id === "run-77")).toBe(true);
   });
 });

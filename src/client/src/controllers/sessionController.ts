@@ -1080,11 +1080,7 @@ export class SessionController {
       const listedSessions = mergePipelineRuns(workspace.path, mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
         .filter((session) => !this.isSuppressedCreatedSession(session, machineId)), machineId);
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
-      for (const session of sessions) {
-        if (isRestoredPipelineRunSession(session) && !this.pendingSessionStarts.has(session.id)) {
-          this.registerRestoredPipelineStart(session, workspace, machineId);
-        }
-      }
+      this.registerRestoredPipelineStarts(sessions, workspace, machineId);
       const selectedSession = this.getState().selectedSession;
       this.setState({
         sessions,
@@ -1763,6 +1759,18 @@ export class SessionController {
       machineId,
     };
     return { tempId, originWorkspace: workspace, workspaceId: workspace.id, cwd: workspace.path, machineId, expectedNavigation, pendingUrlPublished, session, queuedSends: [], discarded: false };
+  }
+
+  /** Register live pending starts for every restored pipeline run row in a
+   * workspace listing, so its status / approve / revise routing works. Called
+   * from every path that builds the workspace session list
+   * (refreshCurrentWorkspaceSessions and workspaceController.selectWorkspace). */
+  registerRestoredPipelineStarts(sessions: readonly SessionInfo[], workspace: Workspace, machineId: string): void {
+    for (const session of sessions) {
+      if (isRestoredPipelineRunSession(session) && !this.pendingSessionStarts.has(session.id)) {
+        this.registerRestoredPipelineStart(session, workspace, machineId);
+      }
+    }
   }
 
   /** A pipeline run row restored from cachedPipelineRuns storage after a
