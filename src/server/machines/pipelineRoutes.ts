@@ -99,8 +99,9 @@ export function registerPipelineRoutes(app: FastifyInstance, runner: PipelineRun
     if (body === undefined) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: "body must be {repoPath, goal, sketches?}" });
     const invalid = validate(body);
     if (invalid !== undefined) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: invalid });
+    const sketches = [...(body.sketches ?? []), ...sketchesFromGoal(body.goal)];
     try {
-      return await reply.code(200).send(await runner.run(body));
+      return await reply.code(200).send(await runner.run({ ...body, sketches }));
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
     }
@@ -127,6 +128,25 @@ function validate(body: PipelineRunRequest): string | undefined {
     if (typeof sketch !== "string" || !isAbsolute(sketch)) return "sketches must be an array of absolute file paths";
   }
   return undefined;
+}
+
+/** Server-side path attachments: absolute file paths written in the goal text
+ * that exist on this machine ride along as sketch context. The goal text itself
+ * is passed through verbatim; explicit sketches win and duplicates drop. */
+export function sketchesFromGoal(goal: string): string[] {
+  const candidates = goal.match(/(?:\/[^\s,;"')\]]+)/g) ?? [];
+  const seen = new Set<string>();
+  const found: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      if (seen.has(candidate) || !statSync(candidate).isFile()) continue;
+    } catch {
+      continue;
+    }
+    seen.add(candidate);
+    found.push(candidate);
+  }
+  return found;
 }
 
 function parseLastJsonLine(text: string): Record<string, unknown> | undefined {

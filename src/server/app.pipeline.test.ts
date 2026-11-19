@@ -65,6 +65,27 @@ describe("buildApp pipeline run route", () => {
     });
   });
 
+  it("extracts existing server-side paths from the goal text as sketch context", async () => {
+    appTestContext.pipelineRunner = new ChildPipelineRunClient({ scriptPath: stubPath });
+    const existing = join(workDir, "notes.md");
+    await writeFile(existing, "design notes");
+
+    const response = await appTestContext.app.inject({
+      method: "POST",
+      url: "/api/pipeline-runs",
+      payload: { repoPath: workDir, goal: `Use ${existing} and /definitely/missing.md as context` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, projectRunId: "run-123" });
+    const argvOut = process.env["STUB_ARGV_OUT"];
+    if (argvOut === undefined) throw new Error("stub argv output path not configured");
+    const raw = await readFile(argvOut, "utf8");
+    expect(raw).toContain(`"--sketch","${existing}"`);
+    expect(raw).toContain(`Use ${existing} and /definitely/missing.md as context`);
+    expect(raw).not.toContain("/definitely/missing.md\"");
+  });
+
   it("passes a CLI failure JSON through as ok:false", async () => {
     process.env["STUB_MODE"] = "fail";
     appTestContext.pipelineRunner = new ChildPipelineRunClient({ scriptPath: stubPath });
