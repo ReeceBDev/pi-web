@@ -558,6 +558,15 @@ export class SessionController {
       void this.runPipelineCommand(pending, queued, pipelineCommand);
       return;
     }
+    if (pending.pipeline === true && pending.pipelineLaunchAttempted === true) {
+      // A launched pipeline row has no backend session that could ever
+      // consume further sends; free text gets an honest note, not a queue.
+      this.appendPipelineLines(pending, [
+        textMessage("user", queued.text),
+        textMessage("system", "This chat drives the pipeline run · send status / approve / revise"),
+      ]);
+      return;
+    }
     pending.queuedSends.push(queued);
     if (pending.pipeline === true) this.maybeLaunchPipelineRun(pending, queued);
     const state = this.getState();
@@ -599,7 +608,21 @@ export class SessionController {
     const index = pending.queuedSends.indexOf(queued);
     if (index >= 0) pending.queuedSends.splice(index, 1);
     this.dropNextQueuedSessionMessage(pending.tempId);
+    if (launched) this.showPipelineRunActivity(pending);
     this.appendPipelineLines(pending, [line]);
+  }
+
+  /** After a successful launch the row's activity names the run — the old
+   * "Creating session · waiting for the backend session" label would lie
+   * forever, because a pipeline row never gets a backend session. */
+  private showPipelineRunActivity(pending: PendingSessionStart): void {
+    if (pending.discarded || pending.pipelineRunId === undefined) return;
+    const activity = pipelineRunActivity(pending.tempId, pending.pipelineRunId);
+    const state = this.getState();
+    this.setState({
+      sessionActivities: { ...state.sessionActivities, [pending.tempId]: activity },
+      activity: state.selectedSession?.id === pending.tempId ? activity : state.activity,
+    });
   }
 
   /** Show lines in the open chat of a pipeline pending row. The row has no
@@ -2488,6 +2511,16 @@ function pendingStartActivity(activity: SessionActivity, sessionId: string): Ses
     label: activity.label,
     ...(activity.detail === undefined ? {} : { detail: activity.detail }),
     at: activity.at,
+  };
+}
+
+function pipelineRunActivity(sessionId: string, runId: string): SessionActivity {
+  return {
+    sessionId,
+    phase: "active",
+    label: "Pipeline run",
+    detail: `${runId} · send status / approve / revise`,
+    at: new Date().toISOString(),
   };
 }
 
