@@ -2,6 +2,7 @@ import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, t
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorScope, type SessionBrowserErrorOwner } from "../browserErrors";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
+import { forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun } from "../cachedPipelineRuns";
 import { textMessage } from "../chatMessages";
 import type { ChatLine } from "../components/shared";
 import { machineSessionKey } from "../machineKeys";
@@ -117,6 +118,10 @@ interface PendingSessionStart {
   /** The launched pipeline run's id, learned from the launch ack; the target
    * for the status / approve / revise chat commands. */
   pipelineRunId?: string;
+  /** Set on pending starts rebuilt from cached pipeline run storage after a
+   * reload: the row reconnects to an already-running run instead of launching
+   * one, and its chat seeds a reconnect note. */
+  pipelineRestored?: boolean;
   /**
    * The real session id, learned from the daemon's `session.startup` events
    * long before the create request resolves. It is what lets the startup view
@@ -287,9 +292,9 @@ export class SessionController {
     this.pendingSessionStarts.set(pending.tempId, pending);
     this.insertAndSelectPendingSession(pending.session, { updateUrl: options?.updateUrl });
     if (pipeline) {
-      // Pipeline rows exist client-side only: no backend session is created,
-      // so nothing is cached or handed off — the row is ephemeral launch UI
-      // and disappears on reload. The first send launches the run.
+      // Pipeline rows exist client-side only: no backend session is created.
+      // The launch itself remembers the run in cachedPipelineRuns storage, so
+      // the row is rebuilt after a reload and keeps driving the run.
       return;
     }
     // Persist the row before the backend answers: a reload mid-start (mobile tab
@@ -597,7 +602,10 @@ export class SessionController {
     try {
       const result = await this.api.pipelineRun(pending.cwd, text);
       launched = result.ok;
-      if (result.ok) pending.pipelineRunId = result.projectRunId;
+      if (result.ok) {
+        pending.pipelineRunId = result.projectRunId;
+        rememberPipelineRun({ runId: result.projectRunId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId });
+      }
       line = result.ok
         ? textMessage("system", `Pipeline run started · ${result.projectRunId} · send status / approve / revise to drive it`)
         : textMessage("system", `Pipeline run failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
@@ -1069,9 +1077,14 @@ export class SessionController {
       // and then discarding the fetched list would lose not-yet-persisted
       // sessions once the stale catalog snapshot is reused without a refetch.
       if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
-      const listedSessions = mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
-        .filter((session) => !this.isSuppressedCreatedSession(session, machineId));
+      const listedSessions = mergePipelineRuns(workspace.path, mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
+        .filter((session) => !this.isSuppressedCreatedSession(session, machineId)), machineId);
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
+      for (const session of sessions) {
+        if (isRestoredPipelineRunSession(session) && !this.pendingSessionStarts.has(session.id)) {
+          this.registerRestoredPipelineStart(session, workspace, machineId);
+        }
+      }
       const selectedSession = this.getState().selectedSession;
       this.setState({
         sessions,
@@ -1107,6 +1120,7 @@ export class SessionController {
       });
     }
     forgetCachedNewSession(session.id, selectedMachineId(this.getState()));
+    forgetPipelineRun(session.id, selectedMachineId(this.getState()));
     clearDraft(this.sessionCacheKey(session.id));
     clearStagedAttachments(this.sessionCacheKey(session.id));
     const state = this.getState();
@@ -1751,6 +1765,32 @@ export class SessionController {
     return { tempId, originWorkspace: workspace, workspaceId: workspace.id, cwd: workspace.path, machineId, expectedNavigation, pendingUrlPublished, session, queuedSends: [], discarded: false };
   }
 
+  /** A pipeline run row restored from cachedPipelineRuns storage after a
+   * reload: register the pending start that routes its status / approve /
+   * revise sends against the still-running (or closed) run. */
+  private registerRestoredPipelineStart(session: ClientPendingStartSessionInfo, workspace: Workspace, machineId: string): void {
+    const restored = isRestoredPipelineRunSession(session) ? session : undefined;
+    if (restored === undefined) return;
+    const pending: PendingSessionStart = {
+      tempId: session.id,
+      originWorkspace: workspace,
+      workspaceId: workspace.id,
+      cwd: session.cwd,
+      machineId,
+      expectedNavigation: this.navigationSelection(),
+      pendingUrlPublished: false,
+      session,
+      queuedSends: [],
+      discarded: false,
+      pipeline: true,
+      pipelineLaunchAttempted: true,
+      pipelineRunId: restored.pipelineRunId,
+      pipelineRestored: true,
+    };
+    this.pendingSessionStarts.set(session.id, pending);
+    this.showPipelineRunActivity(pending);
+  }
+
   private insertAndSelectPendingSession(session: ClientPendingStartSessionInfo, options?: { updateUrl?: boolean | undefined }): void {
     const state = this.getState();
     this.selectClientPendingStartSession(session, {
@@ -1770,10 +1810,13 @@ export class SessionController {
     const state = this.getState();
     const pendingStart = this.pendingSessionStarts.get(session.id);
     const activity = options?.activity ?? state.sessionActivities[session.id] ?? (pendingStart !== undefined ? creatingPendingSessionActivity(session.id, pendingStart.queuedSends.length) : undefined);
+    const pipelineSeed = pendingStart?.pipeline === true && pendingStart.pipelineRestored === true && pendingStart.pipelineRunId !== undefined
+      ? [textMessage("system", `Reconnected to pipeline run · ${pendingStart.pipelineRunId} · send status / approve / revise`)]
+      : [];
     this.setState({
       sessions: options?.sessions ?? (state.sessions.some((candidate) => candidate.id === session.id) ? state.sessions : [session, ...state.sessions]),
       selectedSession: session,
-      messages: [],
+      messages: pipelineSeed,
       messagePageStart: 0,
       messagePageEnd: 0,
       messagePageTotal: 0,

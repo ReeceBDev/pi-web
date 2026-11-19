@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { initialAppState } from "../appState";
+import { createMemoryStorage } from "../cachedNewSessions";
+import { setPipelineRunStorageOverrideForTests } from "../cachedPipelineRuns";
 import { SessionController } from "./sessionController";
 import { emptyTranscriptApi as defaultApi, emptyPage, FakeSocket, oldSession, status, workspace, type AppState } from "./sessionController.testSupport";
 
@@ -211,4 +213,42 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(calls).toEqual({ supervisorUnit: 1, supervisorCreateUnit: 1, startSession: 1 });
     expect(harness.state.selectedSession?.id).toBe("unit-session");
   });
-});
+
+  it("restores a launched pipeline run row after a reload and keeps status working", async () => {
+    const storage = createMemoryStorage();
+    setPipelineRunStorageOverrideForTests(storage);
+    const statusCalls: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([]),
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-77" }),
+      pipelineRunStatus: (runId) => { statusCalls.push(runId); return Promise.resolve({ ok: true, view: { phase: "INTAKE" } }); },
+    };
+    try {
+      const first = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+      await first.controller.startSession({ pipeline: true });
+      await flush();
+      await first.controller.send("Build the flinger");
+      await flush();
+      expect(first.state.activity?.detail).toContain("run-77");
+
+      // Reload: fresh controller (page state gone), same storage.
+      const second = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+      await second.controller.refreshCurrentWorkspaceSessions();
+      const restored = second.state.sessions.find((session) => session.id === "run-77");
+      if (restored === undefined) throw new Error("restored pipeline row missing");
+      expect(restored.firstMessage).toBe("Build the flinger");
+      expect(restored.cwd).toBe("/repo");
+
+      await second.controller.selectSession(restored);
+      const lines = second.state.messages.map((line) => line.parts[0]?.type === "text" ? line.parts[0].text : "");
+      expect(lines.some((text) => text.includes("Reconnected to pipeline run · run-77"))).toBe(true);
+
+      await second.controller.send("status");
+      await flush();
+      expect(statusCalls).toEqual(["run-77"]);
+    } finally {
+      setPipelineRunStorageOverrideForTests(undefined);
+    }
+  });
+});;

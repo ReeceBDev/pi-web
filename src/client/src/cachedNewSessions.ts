@@ -19,7 +19,7 @@ function browserStorage(): Storage | undefined {
   }
 }
 
-function createMemoryStorage(): Storage {
+export function createMemoryStorage(): Storage {
   const values = new Map<string, string>();
   return {
     get length(): number {
