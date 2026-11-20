@@ -122,6 +122,10 @@ interface PendingSessionStart {
    * reload: the row reconnects to an already-running run instead of launching
    * one, and its chat seeds a reconnect note. */
   pipelineRestored?: boolean;
+  /** Chat lines shown in the pipeline row (goal, launch ack, command notes).
+   * The row has no backend transcript, so this record is the only store;
+   * reselecting the row re-seeds messages from it. */
+  pipelineLines?: ChatLine[];
   /**
    * The real session id, learned from the daemon's `session.startup` events
    * long before the create request resolves. It is what lets the startup view
@@ -639,6 +643,9 @@ export class SessionController {
    * backend transcript, so lines live only in the selected-session state. */
   private appendPipelineLines(pending: PendingSessionStart, lines: ChatLine[]): void {
     if (pending.discarded) return;
+    // Record before the selected-guard: every selectClientPendingStartSession
+    // wipes messages, so reselecting the row re-seeds from this record.
+    pending.pipelineLines = [...(pending.pipelineLines ?? []), ...lines];
     if (this.getState().selectedSession?.id !== pending.tempId) return;
     this.setState({ messages: [...this.getState().messages, ...lines] });
   }
@@ -1821,8 +1828,11 @@ export class SessionController {
     const state = this.getState();
     const pendingStart = this.pendingSessionStarts.get(session.id);
     const activity = options?.activity ?? state.sessionActivities[session.id] ?? (pendingStart !== undefined ? (pendingStart.pipeline === true ? pipelineLaunchPendingActivity(session.id) : creatingPendingSessionActivity(session.id, pendingStart.queuedSends.length)) : undefined);
-    const pipelineSeed = pendingStart?.pipeline === true && pendingStart.pipelineRestored === true && pendingStart.pipelineRunId !== undefined
-      ? [textMessage("system", `Reconnected to pipeline run · ${pendingStart.pipelineRunId} · send status / approve / revise`)]
+    const pipelineSeed = pendingStart?.pipeline === true
+      ? (pendingStart.pipelineLines
+        ?? (pendingStart.pipelineRestored === true && pendingStart.pipelineRunId !== undefined
+          ? [textMessage("system", `Reconnected to pipeline run · ${pendingStart.pipelineRunId} · send status / approve / revise`)]
+          : []))
       : [];
     this.setState({
       sessions: options?.sessions ?? (state.sessions.some((candidate) => candidate.id === session.id) ? state.sessions : [session, ...state.sessions]),

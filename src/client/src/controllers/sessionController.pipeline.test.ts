@@ -79,6 +79,32 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(harness.state.clientQueuedSessionMessages[tempId ?? ""]).toBeUndefined();
   });
 
+  it("keeps the launched chat when the user tabs away and back to the row", async () => {
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] });
+
+    await harness.controller.startSession({ pipeline: true });
+    await flush();
+    const row = harness.state.selectedSession;
+    if (row === undefined) throw new Error("pending pipeline row missing");
+    await harness.controller.send("Build the flinger fix");
+    await flush();
+
+    await harness.controller.selectSession(oldSession);
+    await flush();
+    await harness.controller.selectSession(row);
+    await flush();
+
+    expect(harness.state.selectedSession?.id).toBe(row.id);
+    expect(harness.state.messages.map((line) => `${line.role}:${line.parts[0]?.type === "text" ? line.parts[0].text : "?"}`)).toEqual([
+      "user:Build the flinger fix",
+      "system:Pipeline run started · run-42 · send status / approve / revise to drive it",
+    ]);
+  });
+
   it("answers a status command against the launched run without queueing", async () => {
     const statusCalls: string[] = [];
     const api: typeof defaultApi = {
