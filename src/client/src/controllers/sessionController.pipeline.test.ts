@@ -42,6 +42,10 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(row?.id).toMatch(/^creating:[0-9a-f]{32}$/);
     expect(row?.cwd).toBe("/repo");
     expect(harness.state.activity).toMatchObject({ sessionId: row?.id, phase: "active" });
+    // the row must not claim a backend session is booting — nothing starts
+    // until the first message is sent
+    expect(harness.state.activity).toMatchObject({ label: "Pipeline launch pending" });
+    expect(JSON.stringify(harness.state.activity)).not.toContain("backend session");
     expect(calls).toEqual({ supervisorUnit: 0, supervisorCreateUnit: 0, startSession: 0, pipelineRun: 0 });
   });
 

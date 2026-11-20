@@ -576,7 +576,9 @@ export class SessionController {
     if (pending.pipeline === true) this.maybeLaunchPipelineRun(pending, queued);
     const state = this.getState();
     const current = state.clientQueuedSessionMessages[session.id] ?? [];
-    const activity = creatingPendingSessionActivity(session.id, pending.queuedSends.length);
+    const activity = pending.pipeline === true
+      ? pipelineLaunchPendingActivity(session.id)
+      : creatingPendingSessionActivity(session.id, pending.queuedSends.length);
     this.setState({
       clientQueuedSessionMessages: { ...state.clientQueuedSessionMessages, [session.id]: [...current, queuedSessionMessagePreview(queued)] },
       sessionActivities: { ...state.sessionActivities, [session.id]: activity },
@@ -1801,8 +1803,9 @@ export class SessionController {
 
   private insertAndSelectPendingSession(session: ClientPendingStartSessionInfo, options?: { updateUrl?: boolean | undefined }): void {
     const state = this.getState();
+    const pending = this.pendingSessionStarts.get(session.id);
     this.selectClientPendingStartSession(session, {
-      activity: creatingPendingSessionActivity(session.id),
+      activity: pending?.pipeline === true ? pipelineLaunchPendingActivity(session.id) : creatingPendingSessionActivity(session.id),
       sessions: [session, ...state.sessions.filter((candidate) => candidate.id !== session.id)],
       updateUrl: options?.updateUrl,
     });
@@ -1817,7 +1820,7 @@ export class SessionController {
     this.clearPendingUpdates();
     const state = this.getState();
     const pendingStart = this.pendingSessionStarts.get(session.id);
-    const activity = options?.activity ?? state.sessionActivities[session.id] ?? (pendingStart !== undefined ? creatingPendingSessionActivity(session.id, pendingStart.queuedSends.length) : undefined);
+    const activity = options?.activity ?? state.sessionActivities[session.id] ?? (pendingStart !== undefined ? (pendingStart.pipeline === true ? pipelineLaunchPendingActivity(session.id) : creatingPendingSessionActivity(session.id, pendingStart.queuedSends.length)) : undefined);
     const pipelineSeed = pendingStart?.pipeline === true && pendingStart.pipelineRestored === true && pendingStart.pipelineRunId !== undefined
       ? [textMessage("system", `Reconnected to pipeline run · ${pendingStart.pipelineRunId} · send status / approve / revise`)]
       : [];
@@ -2571,6 +2574,19 @@ function pipelineRunActivity(sessionId: string, runId: string): SessionActivity 
     phase: "active",
     label: "Pipeline run",
     detail: `${runId} · send status / approve / revise`,
+    at: new Date().toISOString(),
+  };
+}
+
+/** A pipeline row before its first send: nothing is being created or booted —
+ * the run only starts when the user sends the first message, so the generic
+ * "Creating session · waiting for the backend session" wording would lie. */
+function pipelineLaunchPendingActivity(sessionId: string): SessionActivity {
+  return {
+    sessionId,
+    phase: "active",
+    label: "Pipeline launch pending",
+    detail: "Nothing is booting — send a message to start the pipeline run",
     at: new Date().toISOString(),
   };
 }
