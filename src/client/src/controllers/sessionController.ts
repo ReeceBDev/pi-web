@@ -2,7 +2,7 @@ import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, t
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorScope, type SessionBrowserErrorOwner } from "../browserErrors";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
-import { forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun } from "../cachedPipelineRuns";
+import { forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun, rememberPipelineSubmission } from "../cachedPipelineRuns";
 import { textMessage } from "../chatMessages";
 import type { ChatLine } from "../components/shared";
 import { machineSessionKey } from "../machineKeys";
@@ -115,6 +115,7 @@ interface PendingSessionStart {
   /** Set while a pipeline run launch request is in flight (or succeeded, so
    * later sends only queue); reset on failure so the next send retries. */
   pipelineLaunchAttempted?: boolean;
+  pipelineSubmission?: { requestId: string; goal: string };
   /** The launched pipeline run's id, learned from the launch ack; the target
    * for the status / approve / revise chat commands. */
   pipelineRunId?: string;
@@ -577,7 +578,6 @@ export class SessionController {
       return;
     }
     pending.queuedSends.push(queued);
-    if (pending.pipeline === true) this.maybeLaunchPipelineRun(pending, queued);
     const state = this.getState();
     const current = state.clientQueuedSessionMessages[session.id] ?? [];
     const activity = pending.pipeline === true
@@ -589,6 +589,7 @@ export class SessionController {
       activity: state.selectedSession?.id === session.id ? activity : state.activity,
       error: "",
     });
+    if (pending.pipeline === true) this.maybeLaunchPipelineRun(pending, queued);
   }
 
   /** Launch the pipeline run for a pending row's first prompt send. The
@@ -606,11 +607,16 @@ export class SessionController {
     let launched = false;
     let line: ChatLine;
     try {
-      const result = await this.api.pipelineRun(pending.cwd, text);
+      const submission = (pending.pipelineSubmission ??= { requestId: crypto.randomUUID(), goal: text });
+      if (submission.goal !== text) throw new Error("This submission already has a goal. Resend the original message to retry, or use New Work for a different task.");
+      if (!rememberPipelineSubmission({ runId: `run-${submission.requestId}`, requestId: submission.requestId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId })) {
+        throw new Error("Could not save this submission for safe retry. Check browser storage and try again.");
+      }
+      const result = await this.api.pipelineRun(pending.cwd, text, submission.requestId);
       launched = result.ok;
       if (result.ok) {
         pending.pipelineRunId = result.projectRunId;
-        rememberPipelineRun({ runId: result.projectRunId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId });
+        rememberPipelineRun({ runId: result.projectRunId, requestId: submission.requestId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId });
       }
       line = result.ok
         ? textMessage("system", `Pipeline run started · ${result.projectRunId} · send status / approve / revise to drive it`)
@@ -1125,7 +1131,7 @@ export class SessionController {
       });
     }
     forgetCachedNewSession(session.id, selectedMachineId(this.getState()));
-    forgetPipelineRun(session.id, selectedMachineId(this.getState()));
+    forgetPipelineRun(pendingStart?.pipelineRunId ?? (pendingStart?.pipelineSubmission ? `run-${pendingStart.pipelineSubmission.requestId}` : session.id), selectedMachineId(this.getState()));
     clearDraft(this.sessionCacheKey(session.id));
     clearStagedAttachments(this.sessionCacheKey(session.id));
     const state = this.getState();
@@ -1800,12 +1806,12 @@ export class SessionController {
       queuedSends: [],
       discarded: false,
       pipeline: true,
-      pipelineLaunchAttempted: true,
-      pipelineRunId: restored.pipelineRunId,
+      pipelineLaunchAttempted: restored.pipelineSubmission === undefined,
+      ...(restored.pipelineSubmission ? { pipelineSubmission: restored.pipelineSubmission } : { pipelineRunId: restored.pipelineRunId }),
       pipelineRestored: true,
     };
     this.pendingSessionStarts.set(session.id, pending);
-    this.showPipelineRunActivity(pending);
+    if (pending.pipelineRunId !== undefined) this.showPipelineRunActivity(pending);
   }
 
   private insertAndSelectPendingSession(session: ClientPendingStartSessionInfo, options?: { updateUrl?: boolean | undefined }): void {
@@ -1832,7 +1838,9 @@ export class SessionController {
       ? (pendingStart.pipelineLines
         ?? (pendingStart.pipelineRestored === true && pendingStart.pipelineRunId !== undefined
           ? [textMessage("system", `Reconnected to pipeline run · ${pendingStart.pipelineRunId} · send status / approve / revise`)]
-          : []))
+          : pendingStart.pipelineSubmission
+            ? [textMessage("user", pendingStart.pipelineSubmission.goal), textMessage("system", "Submission not yet confirmed. Resend this goal to retry safely.")]
+            : []))
       : [];
     this.setState({
       sessions: options?.sessions ?? (state.sessions.some((candidate) => candidate.id === session.id) ? state.sessions : [session, ...state.sessions]),

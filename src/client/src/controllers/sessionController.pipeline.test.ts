@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { initialAppState } from "../appState";
 import { createMemoryStorage } from "../cachedNewSessions";
 import { setPipelineRunStorageOverrideForTests } from "../cachedPipelineRuns";
@@ -24,6 +24,8 @@ function makeController(api: typeof defaultApi, initialState: AppState): { contr
 }
 
 describe("SessionController pipeline launches (+ New Work)", () => {
+  beforeEach(() => { setPipelineRunStorageOverrideForTests(createMemoryStorage()); });
+  afterEach(() => { setPipelineRunStorageOverrideForTests(undefined); });
   it("opens the chat row instantly on the repo workspace without supervisor or backend session calls", async () => {
     const calls = { supervisorUnit: 0, supervisorCreateUnit: 0, startSession: 0, pipelineRun: 0 };
     const api: typeof defaultApi = {
@@ -177,11 +179,14 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline decision failed · no-open-card");
   });
 
-  it("renders a failed launch and lets the next send retry", async () => {
+  it("retries a failed launch with the same persisted identity and original goal", async () => {
+    const requestIds: string[] = [];
     let pipelineRunCalls = 0;
     const api: typeof defaultApi = {
       ...defaultApi,
-      pipelineRun: () => {
+      pipelineRun: (_repoPath, goal, requestId) => {
+        requestIds.push(requestId);
+        expect(goal).toBe("First attempt");
         pipelineRunCalls += 1;
         return pipelineRunCalls === 1
           ? Promise.resolve({ ok: false, reason: "temporal_unreachable", detail: "connect ECONNREFUSED 127.0.0.1:7233" })
@@ -198,12 +203,61 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     const firstNote = harness.state.messages.at(-1)?.parts[0];
     expect(firstNote?.type === "text" && firstNote.text).toBe("Pipeline run failed · temporal_unreachable · connect ECONNREFUSED 127.0.0.1:7233");
 
-    await harness.controller.send("Second attempt");
+    await harness.controller.send("First attempt");
     await flush();
 
     expect(pipelineRunCalls).toBe(2);
+    expect(requestIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(requestIds[1]).toBe(requestIds[0]);
     const lastNote = harness.state.messages.at(-1)?.parts[0];
     expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline run started · run-7 · send status / approve / revise to drive it");
+  });
+
+  it("restores an uncertain submission after reload without sending, then retries the same identity", async () => {
+    const ids: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([]),
+      pipelineRun: (_repoPath, goal, requestId) => {
+        expect(goal).toBe("Repair the parser");
+        ids.push(requestId);
+        if (ids.length === 1) return Promise.reject(new Error("response lost"));
+        return Promise.resolve({ ok: true, projectRunId: `run-${requestId}` });
+      },
+    };
+    const first = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    await first.controller.startSession({ pipeline: true });
+    await first.controller.send("Repair the parser");
+    await flush();
+
+    const second = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    await second.controller.refreshCurrentWorkspaceSessions();
+    const restored = second.state.sessions.find((row) => row.id === `run-${ids[0] ?? ""}`);
+    if (restored === undefined) throw new Error("uncertain submission was lost on reload");
+    await second.controller.selectSession(restored);
+    expect(ids).toHaveLength(1);
+    await second.controller.send("A different task");
+    await flush();
+    expect(ids).toHaveLength(1);
+    await second.controller.send("Repair the parser");
+    await flush();
+    expect(ids).toEqual([ids[0], ids[0]]);
+    expect(second.state.activity?.detail).toContain(`run-${ids[0] ?? ""}`);
+  });
+
+  it("does not send when the submission identity cannot be saved", async () => {
+    const storage = createMemoryStorage();
+    storage.setItem = () => { throw new Error("storage full"); };
+    setPipelineRunStorageOverrideForTests(storage);
+    let calls = 0;
+    const harness = makeController({ ...defaultApi, pipelineRun: () => { calls++; return Promise.resolve({ ok: true, projectRunId: "unreachable" }); } }, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    await harness.controller.startSession({ pipeline: true });
+    await harness.controller.send("Repair the parser");
+    await flush();
+    expect(calls).toBe(0);
+    const note = harness.state.messages.at(-1)?.parts[0];
+    expect(note?.type === "text" && note.text).toContain("Could not save this submission");
+    expect(harness.state.clientQueuedSessionMessages[harness.state.selectedSession?.id ?? ""] ?? []).toHaveLength(0);
   });
 
   it("keeps the plain (+ Non-Sandboxed) flow on the backend session path", async () => {

@@ -396,7 +396,7 @@ export const supervisorApi = {
 
 export const pipelineApi = {
   /** Launch a pipeline run on a repo workspace (machine-local only). */
-  pipelineRun: (repoPath: string, goal: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ repoPath, goal }) }),
+  pipelineRun: (repoPath: string, goal: string, requestId: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ requestId, repoPath, goal }) }),
   /** Query a pipeline run's live phase/status card. */
   pipelineRunStatus: (runId: string) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/status`, parsePipelineRunStatus),
   /** Submit a sketch-card decision (approve/revise) to a pipeline run. */

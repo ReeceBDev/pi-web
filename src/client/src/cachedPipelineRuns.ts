@@ -1,10 +1,8 @@
 import type { SessionInfo } from "./api";
 import { createMemoryStorage } from "./cachedNewSessions";
 
-/** Launched pipeline run rows survive reloads. The live pending start dies
- * with the page (mobile tab discard, refresh), but the run keeps driving in
- * the pipeline — the row is rebuilt from this storage on the next session
- * listing so status / approve / revise keep working in that chat. */
+/** Save a submission identity before sending, then replace it with the run
+ * acknowledgement. Uncertain submissions and launched runs both survive reloads. */
 const storageKey = "pi-web:pipeline-runs:v1";
 const defaultMachineId = "local";
 const maxRuns = 30;
@@ -15,6 +13,8 @@ export interface CachedPipelineRunInfo {
   goal: string;
   created: string;
   machineId: string;
+  requestId?: string;
+  submissionPending?: boolean;
 }
 
 let memoryStorage: Storage | undefined;
@@ -37,9 +37,16 @@ function browserStorage(): Storage | undefined {
   }
 }
 
-export function rememberPipelineRun(run: CachedPipelineRunInfo, storage: Storage | undefined = browserStorage()): void {
-  const runs = loadPipelineRuns(storage).filter((candidate) => candidate.runId !== run.runId || candidate.machineId !== run.machineId);
-  savePipelineRuns([run, ...runs].slice(0, maxRuns), storage);
+export function rememberPipelineRun(run: CachedPipelineRunInfo, storage: Storage | undefined = browserStorage()): boolean {
+  const runs = loadPipelineRuns(storage).filter((candidate) => candidate.machineId !== run.machineId || (candidate.runId !== run.runId && (run.requestId === undefined || candidate.requestId !== run.requestId)));
+  let completed = 0;
+  return savePipelineRuns([run, ...runs].filter((candidate) => candidate.submissionPending === true || ++completed <= maxRuns), storage);
+}
+
+/** Save the identity before sending; a reload must not turn an uncertain launch into a new request. */
+export function rememberPipelineSubmission(run: CachedPipelineRunInfo, storage: Storage | undefined = browserStorage()): boolean {
+  if (storage === undefined || (storageOverride === undefined && storage === memoryStorage)) return false;
+  return rememberPipelineRun({ ...run, submissionPending: true }, storage);
 }
 
 export function forgetPipelineRun(runId: string, machineId = defaultMachineId, storage: Storage | undefined = browserStorage()): void {
@@ -49,7 +56,7 @@ export function forgetPipelineRun(runId: string, machineId = defaultMachineId, s
 
 /** Restored rows carry pipelineRunId so the controller can register a live
  * pending start (status / approve / revise routing) for each of them. */
-export type RestoredPipelineRunSessionInfo = SessionInfo & { clientPendingStart: true; machineId: string; pipelineRunId: string };
+export type RestoredPipelineRunSessionInfo = SessionInfo & { clientPendingStart: true; machineId: string; pipelineRunId: string; pipelineSubmission?: { requestId: string; goal: string } };
 
 export function isRestoredPipelineRunSession(session: SessionInfo | undefined): session is RestoredPipelineRunSessionInfo {
   return isRecord(session)
@@ -71,7 +78,7 @@ function restoredPipelineRunSession(run: CachedPipelineRunInfo): RestoredPipelin
     path: `pi-web://pipeline-run/${run.runId}`,
     cwd: run.cwd,
     persisted: false,
-    name: "Pipeline run",
+    name: run.submissionPending === true ? "Pipeline submission" : "Pipeline run",
     created: run.created,
     modified: run.created,
     messageCount: 1,
@@ -79,6 +86,7 @@ function restoredPipelineRunSession(run: CachedPipelineRunInfo): RestoredPipelin
     clientPendingStart: true,
     machineId: run.machineId,
     pipelineRunId: run.runId,
+    ...(run.submissionPending === true && run.requestId !== undefined ? { pipelineSubmission: { requestId: run.requestId, goal: run.goal } } : {}),
   };
 }
 
@@ -94,12 +102,15 @@ export function loadPipelineRuns(storage: Storage | undefined = browserStorage()
   }
 }
 
-function savePipelineRuns(runs: CachedPipelineRunInfo[], storage: Storage | undefined): void {
+function savePipelineRuns(runs: CachedPipelineRunInfo[], storage: Storage | undefined): boolean {
   try {
-    if (runs.length === 0) storage?.removeItem(storageKey);
-    else storage?.setItem(storageKey, JSON.stringify(runs));
+    if (storage === undefined) return false;
+    if (runs.length === 0) { storage.removeItem(storageKey); return storage.getItem(storageKey) === null; }
+    const encoded = JSON.stringify(runs);
+    storage.setItem(storageKey, encoded);
+    return storage.getItem(storageKey) === encoded;
   } catch {
-    // Ignore localStorage quota/privacy errors.
+    return false;
   }
 }
 
@@ -110,8 +121,11 @@ function parsePipelineRun(value: unknown): CachedPipelineRunInfo[] {
   const goal = value["goal"];
   const created = value["created"];
   const machineId = value["machineId"];
+  const requestId = value["requestId"];
+  const submissionPending = value["submissionPending"] === true;
+  if (submissionPending && (typeof requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestId))) return [];
   if (typeof runId !== "string" || runId === "" || typeof cwd !== "string" || typeof goal !== "string" || typeof created !== "string") return [];
-  return [{ runId, cwd, goal, created, machineId: typeof machineId === "string" ? machineId : defaultMachineId }];
+  return [{ runId, cwd, goal, created, machineId: typeof machineId === "string" ? machineId : defaultMachineId, ...(typeof requestId === "string" ? { requestId } : {}), ...(submissionPending ? { submissionPending: true } : {}) }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

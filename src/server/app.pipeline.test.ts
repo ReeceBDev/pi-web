@@ -51,7 +51,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: "Ship the flinger fix", sketches: [join(workDir, "sketch.png")] },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "Ship the flinger fix", sketches: [join(workDir, "sketch.png")] },
     });
 
     expect(response.statusCode).toBe(200);
@@ -60,7 +60,7 @@ describe("buildApp pipeline run route", () => {
     if (argvOut === undefined) throw new Error("stub argv output path not configured");
     const recorded: unknown = JSON.parse(await readFile(argvOut, "utf8"));
     expect(recorded).toMatchObject({
-      argv: ["--repo", workDir, "--goal-file", expect.stringMatching(/goal\.txt$/), "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
+      argv: ["--request-id", "d17e801d-4fe0-4fe3-860b-23805fa78819", "--repo", workDir, "--goal-file", expect.stringMatching(/goal\.txt$/), "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
       goal: "Ship the flinger fix",
     });
   });
@@ -73,7 +73,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: `Use ${existing} and /definitely/missing.md as context` },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: `Use ${existing} and /definitely/missing.md as context` },
     });
 
     expect(response.statusCode).toBe(200);
@@ -93,7 +93,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: "Ship the flinger fix" },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "Ship the flinger fix" },
     });
 
     expect(response.statusCode).toBe(200);
@@ -107,7 +107,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: "relative/path", goal: "Ship it" },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: "relative/path", goal: "Ship it" },
     });
 
     expect(response.statusCode).toBe(400);
@@ -121,7 +121,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: "/definitely/not/a/repo", goal: "Ship it" },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: "/definitely/not/a/repo", goal: "Ship it" },
     });
 
     expect(response.statusCode).toBe(400);
@@ -134,7 +134,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: "   " },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "   " },
     });
 
     expect(response.statusCode).toBe(400);
@@ -146,7 +146,7 @@ describe("buildApp pipeline run route", () => {
     process.env["PI_WEB_PIPELINE_START_RUN"] = stubPath;
     try {
       const client = new ChildPipelineRunClient();
-      const result = await client.run({ repoPath: workDir, goal: "env override" });
+      const result = await client.run({ requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "env override" });
       expect(result).toEqual({ ok: true, projectRunId: "run-123" });
     } finally {
       if (previous === undefined) delete process.env["PI_WEB_PIPELINE_START_RUN"];

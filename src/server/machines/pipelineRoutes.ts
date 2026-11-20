@@ -14,7 +14,7 @@ import type { FastifyInstance } from "fastify";
  * CLI, Temporal, or the artifact store.
  *
  * Wire contract (pipeline/docs/ALIGNMENT-CONTRACT.md, "The wire"):
- * node <script> --repo <abs repo> --goal-file <tmpfile> [--sketch <abs path>]... --actor rbowen
+ * node <script> --request-id <UUID> --repo <abs repo> --goal-file <tmpfile> [--sketch <abs path>]... --actor rbowen
  * stdout's last line is one JSON object: {ok:true, projectRunId} (exit 0) or
  * {ok:false, reason, detail} (exit nonzero).
  */
@@ -26,6 +26,7 @@ const PIPELINE_ACTOR = "rbowen";
 const RUN_ID_RE = /^[A-Za-z0-9._:-]+$/;
 
 export interface PipelineRunRequest {
+  requestId: string;
   repoPath: string;
   goal: string;
   sketches?: string[];
@@ -131,6 +132,7 @@ export class ChildPipelineRunClient implements PipelineRunDelegate {
       await writeFile(goalFile, request.goal, "utf8");
       const args = [
         this.scriptPath,
+        "--request-id", request.requestId,
         "--repo", request.repoPath,
         "--goal-file", goalFile,
         ...(request.sketches ?? []).flatMap((sketch) => ["--sketch", sketch]),
@@ -179,7 +181,7 @@ export function registerPipelineRoutes(
 ): void {
   app.post("/api/pipeline-runs", async (request, reply) => {
     const body = parseRunBody(request.body);
-    if (body === undefined) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: "body must be {repoPath, goal, sketches?}" });
+    if (body === undefined) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: "body must be {requestId, repoPath, goal, sketches?}" });
     const invalid = validate(body);
     if (invalid !== undefined) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: invalid });
     const sketches = [...(body.sketches ?? []), ...sketchesFromGoal(body.goal)];
@@ -217,10 +219,11 @@ export function registerPipelineRoutes(
 
 function parseRunBody(value: unknown): PipelineRunRequest | undefined {
   if (!isRecord(value)) return undefined;
+  if (typeof value["requestId"] !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value["requestId"])) return undefined;
   if (typeof value["repoPath"] !== "string" || typeof value["goal"] !== "string") return undefined;
   const sketches = value["sketches"];
   if (sketches !== undefined && !isStringArray(sketches)) return undefined;
-  return { repoPath: value["repoPath"], goal: value["goal"], ...(sketches === undefined ? {} : { sketches }) };
+  return { requestId: value["requestId"], repoPath: value["repoPath"], goal: value["goal"], ...(sketches === undefined ? {} : { sketches }) };
 }
 
 function isStringArray(value: unknown): value is string[] {
