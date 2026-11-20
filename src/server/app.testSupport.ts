@@ -221,8 +221,8 @@ function delegatingPipelineCommands(): PipelineStatusDelegate & PipelineDecision
     return pipelineCommands;
   };
   return {
-    status: (runId) => delegate().status(runId),
-    decide: (runId, decision, actor) => delegate().decide(runId, decision, actor),
+    status: (runId, execution) => delegate().status(runId, execution),
+    decide: (runId, decision, actor, card) => delegate().decide(runId, decision, actor, card),
   };
 }
 

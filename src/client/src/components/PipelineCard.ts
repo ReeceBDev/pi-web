@@ -1,8 +1,10 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { PipelineDecisionCard } from "./shared";
+import type { PipelineApprovalBinding } from "../../../shared/pipelineApproval";
+import type { PendingPipelineDecision } from "../cachedPipelineRuns";
+import type { PipelineDecisionCard, PipelineDeliveryView } from "./shared";
 
-export type PipelineDecideCallback = (decision: "approve" | "revise") => void | Promise<void>;
+export type PipelineDecideCallback = (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding) => void | Promise<void>;
 
 /**
  * The pipeline run's live decision card in the run's chat: current phase, the
@@ -15,6 +17,10 @@ export class PipelineCard extends LitElement {
   @property({ attribute: false }) runId = "";
   @property({ attribute: false }) phase = "";
   @property({ attribute: false }) closeStatus?: string;
+  @property({ attribute: false }) detail?: string;
+  @property({ attribute: false }) stale = false;
+  @property({ attribute: false }) delivery?: PipelineDeliveryView;
+  @property({ attribute: false }) retry?: PendingPipelineDecision;
   @property({ attribute: false }) card?: PipelineDecisionCard;
   @property({ attribute: false }) onDecide?: PipelineDecideCallback;
 
@@ -33,15 +39,31 @@ export class PipelineCard extends LitElement {
           <span class="phase" role="status" aria-live="polite">${closed ? `closed · ${this.closeStatus ?? "unknown"}` : `phase · ${this.phase}`}</span>
           <span class="run">${this.runId}</span>
         </header>
+        ${this.detail !== undefined ? html`<p role="status">${this.detail}</p>` : null}
+        ${this.stale ? html`<p role="status">Status could not refresh. Showing the last known state.</p>` : null}
+        ${this.delivery ? html`
+          <p>Build <code>${this.delivery.buildDigest}</code></p>
+          ${this.delivery.report !== undefined ? html`<details class="artifact"><summary>Verification report</summary><pre>${this.delivery.report}</pre></details>`
+            : html`<p>Verification report unavailable · ${this.delivery.reportDigest}</p>`}
+          ${this.delivery.diff !== undefined ? html`<details class="artifact"><summary>Delivered changes</summary><pre>${this.delivery.diff}</pre></details>`
+            : html`<p>Source diff unavailable for this build.</p>`}
+        ` : null}
+        ${this.retry ? this.renderRetry(this.retry) : null}
         ${this.renderBody()}
       </article>
     `;
   }
 
+  private renderRetry(pending: PendingPipelineDecision): TemplateResult {
+    return html`<button ?disabled=${this.submitting !== undefined}
+      @click=${() => void this.decide(pending.decision, pending.binding)}>Retry decision confirmation</button>`;
+  }
+
   private renderBody(): TemplateResult {
     const card = this.card;
-    if (card === undefined) return html`<p class="idle">No decision card open · the next one posts here</p>`;
-    const disabled = card.decided === true || card.decisionPending === true || this.submitting !== undefined;
+    if (card === undefined) return this.closeStatus !== undefined || this.detail !== undefined ? html`` : html`<p class="idle">Waiting for the next pipeline action</p>`;
+    const disabled = card.decided === true || card.decisionPending === true || this.submitting !== undefined || this.stale ||
+      this.retry !== undefined || card.artifact === undefined || card.binding === undefined;
     return html`
       <div class="question">
         <span class="q-label">${card.stage ?? "decision"} · ${card.questionId}</span>
@@ -54,8 +76,8 @@ export class PipelineCard extends LitElement {
         ? html`<p class="decided" role="status">Decided · recorded</p>`
         : html`
           <div class="actions">
-            <button class="decide-approve" ?disabled=${disabled} @click=${() => void this.decide("approve")}>Approve</button>
-            <button class="decide-revise" ?disabled=${disabled} @click=${() => void this.decide("revise")}>Revise</button>
+            <button class="decide-approve" ?disabled=${disabled} @click=${() => void this.decide("approve", card.binding)}>Approve</button>
+            <button class="decide-revise" ?disabled=${disabled} @click=${() => void this.decide("revise", card.binding)}>Revise</button>
             ${card.decisionPending === true || this.submitting !== undefined ? html`<span class="pending" role="status">Recording decision…</span>` : null}
           </div>
         `}
@@ -63,11 +85,11 @@ export class PipelineCard extends LitElement {
     `;
   }
 
-  private async decide(decision: "approve" | "revise"): Promise<void> {
-    if (this.submitting !== undefined) return;
+  private async decide(decision: "approve" | "revise", binding?: PipelineApprovalBinding): Promise<void> {
+    if (this.submitting !== undefined || !binding) return;
     this.submitting = decision;
     try {
-      await this.onDecide?.(decision);
+      await this.onDecide?.(decision, this.runId, binding);
     } catch {
       this.error = "Decision failed · press the button again";
     } finally {

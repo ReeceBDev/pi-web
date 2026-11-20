@@ -7,6 +7,12 @@ import { ChildPipelineCommandClient, ChildPipelineRunClient } from "./machines/p
 
 registerAppTestHooks();
 
+const execution = "01a1f777-e9fe-777d-b157-8cd6e797d35a";
+const binding = {
+  rootExecutionId: execution, targetExecutionId: execution, stage: "sketches" as const,
+  questionId: "sketch-approval", revision: 1, artifactSha256: "a".repeat(64),
+};
+
 /** Stub start-run CLI: records argv + goal-file content, then succeeds or
  * fails depending on STUB_MODE (the child inherits this process's env). */
 async function writeStubScript(dir: string): Promise<string> {
@@ -239,18 +245,18 @@ describe("buildApp pipeline status/decision routes", () => {
 
   it("POST decision submits approve with the default actor", async () => {
     stubCommands();
-    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "approve" } });
+    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "approve", card: binding } });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ ok: true, receipt: { accepted: true, decision: "approve" } });
     const argvOut = process.env["STUB_ARGV_OUT"];
     if (argvOut === undefined) throw new Error("stub argv output path not configured");
-    expect(JSON.parse(await readFile(argvOut, "utf8"))).toEqual(["--run", "run-42", "--decision", "approve", "--actor", "rbowen"]);
+    expect(JSON.parse(await readFile(argvOut, "utf8"))).toEqual(["--run", "run-42", "--decision", "approve", "--actor", "rbowen", "--card", JSON.stringify(binding)]);
   });
 
   it("POST decision maps no-open-card to a typed failure", async () => {
     process.env["STUB_MODE"] = "no-card";
     stubCommands();
-    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "revise", actor: "rbowen-delegated" } });
+    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "revise", card: binding } });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: false, reason: "no-open-card", detail: "" });
   });
@@ -272,7 +278,7 @@ describe("buildApp pipeline status/decision routes", () => {
     try {
       const client = new ChildPipelineCommandClient();
       await expect(client.status("run-9")).resolves.toMatchObject({ ok: true, view: { runId: "run-9", phase: "AWAITING_SKETCH_APPROVAL" } });
-      await expect(client.decide("run-9", "approve", "rbowen")).resolves.toMatchObject({ ok: true, receipt: { accepted: true } });
+      await expect(client.decide("run-9", "approve", "rbowen", binding)).resolves.toMatchObject({ ok: true, receipt: { accepted: true } });
     } finally {
       if (previousStatus === undefined) delete process.env["PI_WEB_PIPELINE_STATUS"];
       else process.env["PI_WEB_PIPELINE_STATUS"] = previousStatus;

@@ -996,6 +996,10 @@ export class ChatView extends LitElement {
         .runId=${part.runId}
         .phase=${part.phase}
         .closeStatus=${part.closeStatus}
+        .detail=${part.detail}
+        .stale=${part.stale ?? false}
+        .delivery=${part.delivery}
+        .retry=${part.retry}
         .card=${part.card}
         .onDecide=${this.onPipelineDecide}
       ></pipeline-card>

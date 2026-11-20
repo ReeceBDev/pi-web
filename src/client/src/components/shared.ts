@@ -59,7 +59,15 @@ export interface ToolExecutionPart {
  * the run's chat with Approve/Revise buttons. decided/decisionPending are
  * client-side button state; the pipeline stays the source of truth for
  * whether a question is open. */
+export interface PipelineDeliveryView {
+  buildDigest: string;
+  reportDigest: string;
+  report?: string;
+  diff?: string;
+}
+
 export interface PipelineDecisionCard {
+  binding?: import("../../../shared/pipelineApproval").PipelineApprovalBinding;
   questionId: string;
   artifactSha256: string;
   revision: number;
@@ -84,7 +92,7 @@ export type ChatPart =
   | { type: "toolCall"; toolCallId?: string; toolName: string; summary: string; args?: unknown }
   | ToolExecutionPart
   | { type: "toolResult"; toolCallId?: string; toolName: string; text: string; isError: boolean; content?: unknown; details?: unknown }
-  | { type: "pipelineCard"; runId: string; phase: string; closeStatus?: string; card?: PipelineDecisionCard }
+  | { type: "pipelineCard"; runId: string; phase: string; closeStatus?: string; detail?: string; stale?: boolean; delivery?: PipelineDeliveryView; retry?: import("../cachedPipelineRuns").PendingPipelineDecision; card?: PipelineDecisionCard }
   | { type: "empty" };
 
 export interface ChatLine {

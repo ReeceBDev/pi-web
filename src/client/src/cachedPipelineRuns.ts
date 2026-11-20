@@ -1,3 +1,4 @@
+import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding } from "../../shared/pipelineApproval";
 import type { SessionInfo } from "./api";
 import { createMemoryStorage } from "./cachedNewSessions";
 
@@ -7,6 +8,11 @@ const storageKey = "pi-web:pipeline-runs:v1";
 const defaultMachineId = "local";
 const maxRuns = 30;
 
+export interface PendingPipelineDecision {
+  binding: PipelineApprovalBinding;
+  decision: "approve" | "revise";
+}
+
 export interface CachedPipelineRunInfo {
   runId: string;
   cwd: string;
@@ -14,6 +20,8 @@ export interface CachedPipelineRunInfo {
   created: string;
   machineId: string;
   requestId?: string;
+  executionRunId?: string;
+  pendingDecision?: PendingPipelineDecision;
   submissionPending?: boolean;
 }
 
@@ -49,6 +57,27 @@ export function rememberPipelineSubmission(run: CachedPipelineRunInfo, storage: 
   return rememberPipelineRun({ ...run, submissionPending: true }, storage);
 }
 
+export function savePipelineExecution(runId: string, machineId: string, executionRunId: string): boolean {
+  const storage = browserStorage();
+  const runs = loadPipelineRuns(storage);
+  return savePipelineRuns(runs.map((run) => run.runId === runId && run.machineId === machineId
+    ? { ...run, executionRunId }
+    : run), storage);
+}
+
+export function savePipelineDecision(runId: string, machineId: string, pending: PendingPipelineDecision | undefined): boolean {
+  const storage = browserStorage();
+  const runs = loadPipelineRuns(storage);
+  if (!runs.some((run) => run.runId === runId && run.machineId === machineId)) return false;
+  return savePipelineRuns(runs.map((run) => {
+    if (run.runId !== runId || run.machineId !== machineId) return run;
+    const next = { ...run };
+    if (pending) next.pendingDecision = pending;
+    else delete next.pendingDecision;
+    return next;
+  }), storage);
+}
+
 export function forgetPipelineRun(runId: string, machineId = defaultMachineId, storage: Storage | undefined = browserStorage()): void {
   const runs = loadPipelineRuns(storage).filter((candidate) => candidate.runId !== runId || candidate.machineId !== machineId);
   savePipelineRuns(runs, storage);
@@ -56,7 +85,7 @@ export function forgetPipelineRun(runId: string, machineId = defaultMachineId, s
 
 /** Restored rows carry pipelineRunId so the controller can register a live
  * pending start (status / approve / revise routing) for each of them. */
-export type RestoredPipelineRunSessionInfo = SessionInfo & { clientPendingStart: true; machineId: string; pipelineRunId: string; pipelineSubmission?: { requestId: string; goal: string } };
+export type RestoredPipelineRunSessionInfo = SessionInfo & { clientPendingStart: true; machineId: string; pipelineRunId: string; pipelineExecutionRunId?: string; pipelinePendingDecision?: PendingPipelineDecision; pipelineSubmission?: { requestId: string; goal: string } };
 
 export function isRestoredPipelineRunSession(session: SessionInfo | undefined): session is RestoredPipelineRunSessionInfo {
   return isRecord(session)
@@ -86,6 +115,8 @@ function restoredPipelineRunSession(run: CachedPipelineRunInfo): RestoredPipelin
     clientPendingStart: true,
     machineId: run.machineId,
     pipelineRunId: run.runId,
+    ...(run.executionRunId !== undefined ? { pipelineExecutionRunId: run.executionRunId } : {}),
+    ...(run.pendingDecision ? { pipelinePendingDecision: run.pendingDecision } : {}),
     ...(run.submissionPending === true && run.requestId !== undefined ? { pipelineSubmission: { requestId: run.requestId, goal: run.goal } } : {}),
   };
 }
@@ -123,9 +154,14 @@ function parsePipelineRun(value: unknown): CachedPipelineRunInfo[] {
   const machineId = value["machineId"];
   const requestId = value["requestId"];
   const submissionPending = value["submissionPending"] === true;
+  const execution = value["executionRunId"];
+  const stored = value["pendingDecision"];
+  const binding = isRecord(stored) ? readPipelineApproval(stored["binding"]) : undefined;
+  const decision = isRecord(stored) ? stored["decision"] : undefined;
+  const pendingDecision: PendingPipelineDecision | undefined = binding && (decision === "approve" || decision === "revise") ? { binding, decision } : undefined;
   if (submissionPending && (typeof requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestId))) return [];
   if (typeof runId !== "string" || runId === "" || typeof cwd !== "string" || typeof goal !== "string" || typeof created !== "string") return [];
-  return [{ runId, cwd, goal, created, machineId: typeof machineId === "string" ? machineId : defaultMachineId, ...(typeof requestId === "string" ? { requestId } : {}), ...(submissionPending ? { submissionPending: true } : {}) }];
+  return [{ runId, cwd, goal, created, machineId: typeof machineId === "string" ? machineId : defaultMachineId, ...(typeof requestId === "string" ? { requestId } : {}), ...(submissionPending ? { submissionPending: true } : {}), ...(isPipelineExecutionId(execution) ? { executionRunId: execution } : {}), ...(pendingDecision ? { pendingDecision } : {}) }];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

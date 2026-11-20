@@ -2,7 +2,8 @@ import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, t
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorScope, type SessionBrowserErrorOwner } from "../browserErrors";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
-import { forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun, rememberPipelineSubmission } from "../cachedPipelineRuns";
+import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding } from "../../../shared/pipelineApproval";
+import { savePipelineDecision, savePipelineExecution, type PendingPipelineDecision, forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun, rememberPipelineSubmission } from "../cachedPipelineRuns";
 import { textMessage } from "../chatMessages";
 import type { ChatLine, ChatPart, PipelineDecisionCard } from "../components/shared";
 import { machineSessionKey } from "../machineKeys";
@@ -121,6 +122,9 @@ interface PendingSessionStart {
   /** The launched pipeline run's id, learned from the launch ack; the target
    * for the status / approve / revise chat commands. */
   pipelineRunId?: string;
+  pipelineExecutionRunId?: string;
+  pipelineUnconfirmedDecision?: PendingPipelineDecision;
+  pipelineStale?: boolean;
   /** Set on pending starts rebuilt from cached pipeline run storage after a
    * reload: the row reconnects to an already-running run instead of launching
    * one, and its chat seeds a reconnect note. */
@@ -636,7 +640,8 @@ export class SessionController {
       launched = result.ok;
       if (result.ok) {
         pending.pipelineRunId = result.projectRunId;
-        rememberPipelineRun({ runId: result.projectRunId, requestId: submission.requestId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId });
+        if (isPipelineExecutionId(result.executionRunId)) pending.pipelineExecutionRunId = result.executionRunId;
+        rememberPipelineRun({ ...(pending.pipelineExecutionRunId !== undefined ? { executionRunId: pending.pipelineExecutionRunId } : {}), runId: result.projectRunId, requestId: submission.requestId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId });
       }
       line = result.ok
         ? textMessage("system", `Pipeline run started · ${result.projectRunId} · decision cards post here`)
@@ -649,10 +654,34 @@ export class SessionController {
     if (index >= 0) pending.queuedSends.splice(index, 1);
     this.dropNextQueuedSessionMessage(pending.tempId);
     if (launched) {
+      if (pending.pipelineExecutionRunId !== undefined) this.promotePipelineRow(pending);
       this.showPipelineRunActivity(pending);
       this.startPipelinePolling(pending);
     }
     this.appendPipelineLines(pending, [line]);
+  }
+
+  private promotePipelineRow(pending: PendingSessionStart): void {
+    const runId = pending.pipelineRunId;
+    if (runId === undefined || pending.discarded || pending.tempId === runId) return;
+    const tempId = pending.tempId;
+    const state = this.getState();
+    const session = { ...pending.session, id: runId, path: "pi-web://pipeline-run/" + runId };
+    pending.tempId = runId;
+    pending.session = session;
+    this.pendingSessionStarts.delete(tempId);
+    this.pendingSessionStarts.set(runId, pending);
+    const selected = state.selectedSession?.id === tempId;
+    const sessionActivities = Object.fromEntries(Object.entries(state.sessionActivities).filter(([id]) => id !== tempId));
+    this.setState({
+      sessions: state.sessions.map((row) => row.id === tempId ? session : row),
+      sessionActivities,
+      ...(selected ? { selectedSession: session } : {}),
+    });
+    if (selected) {
+      this.sessionSelection.rememberSession({ ...session, cwd: this.workspaceSelectionKey(session.cwd) });
+      this.updateUrl({ replace: true });
+    }
   }
 
   /** After a successful launch the row's activity names the run — the old
@@ -689,23 +718,15 @@ export class SessionController {
     if (runId === undefined) {
       line = textMessage("system", "Pipeline command failed · no run id recorded for this chat");
     } else if (command === "status") {
-      try {
-        const result = await this.api.pipelineRunStatus(runId);
-        line = result.ok
-          ? textMessage("system", `Pipeline status · ${runId} · ${pipelineStatusSummary(result.view)}`)
-          : textMessage("system", `Pipeline status failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
-      } catch (error) {
-        line = textMessage("system", `Pipeline status failed · ${errorMessage(error)}`);
-      }
+      const view = pending.pipelineLastView;
+      line = textMessage("system", view ? "Pipeline status · " + runId + " · " + pipelineStatusSummary(view) : "Waiting for pipeline status");
     } else {
-      try {
-        const result = await this.api.pipelineRunDecision(runId, command);
-        line = result.ok
-          ? textMessage("system", `Pipeline decision accepted · ${pipelineDecisionSummary(result.receipt)}`)
-          : textMessage("system", `Pipeline decision failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
-      } catch (error) {
-        line = textMessage("system", `Pipeline decision failed · ${errorMessage(error)}`);
+      const part = pending.pipelineCard?.parts[0];
+      if (part?.type === "pipelineCard" && part.card?.binding && part.card.artifact !== undefined) {
+        await this.submitPipelineDecision(command, runId, part.card.binding);
+        return;
       }
+      line = textMessage("system", "Open and review the current decision card before deciding.");
     }
     this.appendPipelineLines(pending, [line]);
   }
@@ -719,17 +740,17 @@ export class SessionController {
     const runId = pending.pipelineRunId;
     if (runId === undefined || this.pipelinePollers.has(runId) || this.disposed) return;
     let inFlight = false;
-    const timer = setInterval(() => {
+    const tick = () => {
       if (pending.discarded || this.disposed) {
         this.stopPipelinePolling(runId);
         return;
       }
-      if (inFlight) return; // status CLI can hang on a busy Temporal; skip the tick
+      if (inFlight) return;
       inFlight = true;
       void this.pollPipelineRun(pending, runId).finally(() => { inFlight = false; });
-    }, this.pipelinePollMs);
-    this.pipelinePollers.set(runId, timer);
-    void this.pollPipelineRun(pending, runId);
+    };
+    this.pipelinePollers.set(runId, setInterval(tick, this.pipelinePollMs));
+    tick();
   }
 
   private stopPipelinePolling(runId: string): void {
@@ -743,13 +764,30 @@ export class SessionController {
   private async pollPipelineRun(pending: PendingSessionStart, runId: string): Promise<void> {
     let view: Record<string, unknown>;
     try {
-      const result = await this.api.pipelineRunStatus(runId);
-      if (!result.ok) return; // transient CLI/Temporal hiccup: keep polling silently
+      const result = await this.api.pipelineRunStatus(runId, pending.pipelineExecutionRunId);
+      if (!result.ok) throw new Error(result.reason);
       view = result.view;
+      if ((typeof view["runId"] === "string" && view["runId"] !== runId) ||
+          (pending.pipelineExecutionRunId !== undefined && view["executionRunId"] !== pending.pipelineExecutionRunId)) {
+        throw new Error("Pipeline status belongs to a different execution");
+      }
     } catch {
+      if (!pending.discarded && !this.disposed && pending.pipelineStale !== true) {
+        pending.pipelineStale = true;
+        this.updatePipelineCardLine(pending, runId, pending.pipelineLastView ?? { phase: "STARTING" });
+      }
       return;
     }
-    if (pending.discarded) return;
+    if (pending.discarded || this.disposed) return;
+    if (pending.pipelineExecutionRunId === undefined && isPipelineExecutionId(view["executionRunId"])) {
+      pending.pipelineExecutionRunId = view["executionRunId"];
+      savePipelineExecution(runId, pending.machineId, view["executionRunId"]);
+    }
+    if (pending.pipelineExecutionRunId === undefined && isPipelineExecutionId(view["executionRunId"])) {
+      pending.pipelineExecutionRunId = view["executionRunId"];
+      savePipelineExecution(runId, pending.machineId, view["executionRunId"]);
+    }
+    pending.pipelineStale = false;
     pending.pipelineLastView = view;
     const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
     if (phase === "CLOSED") {
@@ -774,7 +812,25 @@ export class SessionController {
     const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
     const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : undefined;
     const card = pipelineCardOf(pending, view);
-    const part: ChatPart = { type: "pipelineCard", runId, phase, ...(closeStatus === undefined ? {} : { closeStatus }), ...(card === undefined ? {} : { card }) };
+    const finalPhase = typeof view["finalPhase"] === "string" ? view["finalPhase"] : undefined;
+    const block = optionalPipelineRecord(view, "block");
+    const output = optionalPipelineRecord(view, "delivery");
+    const delivery = output && typeof output["buildDigest"] === "string" && typeof output["reportDigest"] === "string" &&
+      view["status"] === "completed" ? {
+        buildDigest: output["buildDigest"], reportDigest: output["reportDigest"],
+        ...(typeof output["report"] === "string" ? { report: output["report"] } : {}),
+        ...(typeof output["diff"] === "string" ? { diff: output["diff"] } : {}),
+      } : undefined;
+    const detail = typeof block?.["reason"] === "string" ? (finalPhase ?? phase) + " blocked · " + block["reason"]
+      : view["action"] === "revising-modules" ? "Waiting for a revised module plan"
+      : view["status"] === "diagnostic" ? "Selected phases finished"
+      : delivery ? "Verified delivery" : finalPhase;
+    const part: ChatPart = {
+      type: "pipelineCard", runId, phase, stale: pending.pipelineStale === true,
+      ...(closeStatus === undefined ? {} : { closeStatus }), ...(card === undefined ? {} : { card }),
+      ...(detail === undefined ? {} : { detail }), ...(delivery === undefined ? {} : { delivery }),
+      ...(pending.pipelineUnconfirmedDecision === undefined ? {} : { retry: pending.pipelineUnconfirmedDecision }),
+    };
     const line = pending.pipelineCard;
     if (line !== undefined && pending.pipelineLines?.includes(line) === true) {
       line.parts = [part];
@@ -789,30 +845,44 @@ export class SessionController {
   /** Approve/revise the open card from its buttons (the card UI, not typed
    * commands). Receipt renders as a note; the decided question's buttons stay
    * disabled until a new revision (or question) opens. */
-  async submitPipelineDecision(decision: "approve" | "revise"): Promise<void> {
+  async submitPipelineDecision(decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding): Promise<void> {
     const session = this.getState().selectedSession;
     const pending = session === undefined ? undefined : this.pendingSessionStarts.get(session.id);
-    const runId = pending?.pipelineRunId;
-    const cardPart = pending?.pipelineCard?.parts[0];
-    if (pending === undefined || runId === undefined || cardPart?.type !== "pipelineCard" || cardPart.card === undefined) return;
-    const card = cardPart.card;
-    const key = `${card.questionId}@${String(card.revision)}`;
-    if (card.decided === true || card.decisionPending === true || (pending.pipelineDecidedKeys ?? []).includes(key)) return;
+    if (pending?.pipelineRunId !== runId || pending.discarded || pending.pipelineDecideInFlight !== undefined) return;
+    const key = JSON.stringify(binding);
+    const cardPart = pending.pipelineCard?.parts[0];
+    const card = cardPart?.type === "pipelineCard" ? cardPart.card : undefined;
+    const unconfirmed = pending.pipelineUnconfirmedDecision;
+    const retrying = unconfirmed?.decision === decision && JSON.stringify(unconfirmed.binding) === key;
+    const current = card?.artifact !== undefined && JSON.stringify(card.binding) === key && pending.pipelineStale !== true;
+    if (unconfirmed ? !retrying : !current || (pending.pipelineDecidedKeys ?? []).includes(key)) return;
+    const submission = { binding, decision };
+    if (!savePipelineDecision(runId, pending.machineId, submission)) {
+      this.appendPipelineLines(pending, [textMessage("system", "Could not save the approval identity for a safe retry.")]);
+      return;
+    }
+    pending.pipelineUnconfirmedDecision = submission;
     pending.pipelineDecideInFlight = key;
     const view = pending.pipelineLastView;
-    if (view !== undefined) this.updatePipelineCardLine(pending, runId, view);
+    if (view) this.updatePipelineCardLine(pending, runId, view);
     try {
-      const result = await this.api.pipelineRunDecision(runId, decision);
+      const result = await this.api.pipelineRunDecision(runId, decision, binding);
+      if (result.ok || result.reason === "stale-card") {
+        savePipelineDecision(runId, pending.machineId, undefined);
+        delete pending.pipelineUnconfirmedDecision;
+      }
       if (result.ok) pending.pipelineDecidedKeys = [...(pending.pipelineDecidedKeys ?? []), key];
       this.appendPipelineLines(pending, [result.ok
-        ? textMessage("system", `Pipeline decision accepted · ${pipelineDecisionSummary(result.receipt)}`)
-        : textMessage("system", `Pipeline decision failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`)]);
+        ? textMessage("system", "Pipeline decision accepted · " + pipelineDecisionSummary(result.receipt))
+        : textMessage("system", "Pipeline decision could not be confirmed · " + result.reason + (result.detail !== "" ? " · " + result.detail : ""))]);
     } catch (error) {
-      this.appendPipelineLines(pending, [textMessage("system", `Pipeline decision failed · ${errorMessage(error)}`)]);
+      this.appendPipelineLines(pending, [textMessage("system", "Pipeline decision acknowledgement pending · " + errorMessage(error))]);
     } finally {
       delete pending.pipelineDecideInFlight;
       const latest = pending.pipelineLastView;
-      if (latest !== undefined) this.updatePipelineCardLine(pending, runId, latest);
+      if (!this.disposed && this.pendingSessionStarts.get(pending.tempId) === pending) {
+        this.updatePipelineCardLine(pending, runId, latest ?? { phase: "STARTING" });
+      }
     }
   }
 
@@ -1937,6 +2007,8 @@ export class SessionController {
       pipeline: true,
       pipelineLaunchAttempted: restored.pipelineSubmission === undefined,
       ...(restored.pipelineSubmission ? { pipelineSubmission: restored.pipelineSubmission } : { pipelineRunId: restored.pipelineRunId }),
+      ...(restored.pipelineExecutionRunId !== undefined ? { pipelineExecutionRunId: restored.pipelineExecutionRunId } : {}),
+      ...(restored.pipelinePendingDecision ? { pipelineUnconfirmedDecision: restored.pipelinePendingDecision } : {}),
       pipelineRestored: true,
     };
     this.pendingSessionStarts.set(session.id, pending);
@@ -2853,7 +2925,8 @@ function pipelineCardOf(pending: PendingSessionStart, view: Record<string, unkno
   const revision = record["revision"];
   const artifactSha256 = record["artifactSha256"];
   if (typeof questionId !== "string" || questionId === "" || typeof revision !== "number" || typeof artifactSha256 !== "string") return undefined;
-  const key = `${questionId}@${String(revision)}`;
+  const binding = readPipelineApproval({ ...record, rootExecutionId: view["executionRunId"] });
+  const key = JSON.stringify(binding);
   const stage = record["stage"];
   const artifact = record["artifact"];
   return {
@@ -2861,6 +2934,7 @@ function pipelineCardOf(pending: PendingSessionStart, view: Record<string, unkno
     artifactSha256,
     revision,
     ...(typeof stage === "string" ? { stage } : {}),
+    ...(binding ? { binding } : {}),
     ...(typeof artifact === "string" ? { artifact } : {}),
     decided: (pending.pipelineDecidedKeys ?? []).includes(key),
     decisionPending: pending.pipelineDecideInFlight === key,
