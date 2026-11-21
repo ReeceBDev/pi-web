@@ -729,7 +729,10 @@ describe("PiWebApp plugin host", () => {
     if (!(sessions instanceof SessionController)) throw new Error("PiWebApp session controller was unavailable");
     if (!Reflect.set(sessions, "api", { startSession: () => startRequest.promise })) throw new Error("Could not stub session start API");
 
-    await callAsyncAppMethod(app, "startSessionAndOpenChat");
+    // A path-based start (unit worktree chat): the no-path "+ New Work" entry
+    // is now a pipeline launch, so the pending-start recovery machinery is
+    // exercised through the backend-session variant.
+    await callAsyncAppMethod(app, "startSessionAndOpenChat", undefined, workspace.path);
     expect(browser.url.searchParams.get("view")).toBe("chat");
     callAppMethod(app, "selectMainView", "workspace");
     startRequest.resolve(started);

@@ -2140,6 +2140,52 @@ export function parseSupervisorWorktreeCreated(value: unknown): { worktreePath: 
   return { worktreePath: requireString(record, "worktreePath") };
 }
 
+export type PipelineRunAck = { ok: true; projectRunId: string; executionRunId?: string } | { ok: false; reason: string; detail: string };
+
+export function parsePipelineRunAck(value: unknown): PipelineRunAck {
+  if (!isRecord(value)) throw new Error("Invalid PI WEB pipeline run response");
+  if (value["ok"] === true && typeof value["projectRunId"] === "string") return { ok: true, projectRunId: value["projectRunId"], ...(typeof value["executionRunId"] === "string" ? { executionRunId: value["executionRunId"] } : {}) };
+  return {
+    ok: false,
+    reason: typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
+    detail: typeof value["detail"] === "string" ? value["detail"] : "",
+  };
+}
+
+export type PipelineRunStatus = { ok: true; view: Record<string, unknown> } | { ok: false; reason: string; detail: string };
+
+export function parsePipelineRunStatus(value: unknown): PipelineRunStatus {
+  const view = isRecord(value) ? optionalRecord(value, "view") : undefined;
+  if (view !== undefined) return { ok: true, view };
+  return {
+    ok: false,
+    reason: isRecord(value) && typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
+    detail: isRecord(value) && typeof value["detail"] === "string" ? value["detail"] : "",
+  };
+}
+
+export type PipelineRunDecision = { ok: true; receipt: Record<string, unknown> } | { ok: false; reason: string; detail: string };
+
+export function parsePipelineRunDecision(value: unknown): PipelineRunDecision {
+  const receipt = isRecord(value) ? optionalRecord(value, "receipt") : undefined;
+  if (receipt !== undefined) return { ok: true, receipt };
+  return {
+    ok: false,
+    reason: isRecord(value) && typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
+    detail: isRecord(value) && typeof value["detail"] === "string" ? value["detail"] : "",
+  };
+}
+
+/** The optional Record-valued field of a response record, or undefined. */
+function optionalRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = record[key];
+  return isPlainRecord(value) ? value : undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function optionalBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   const value = record[key];
   if (value === undefined) return undefined;

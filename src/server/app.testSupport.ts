@@ -8,9 +8,11 @@ import { registerProjectMutationRoutes } from "./sessiond/projectMutationRoutes.
 import { afterEach, beforeEach } from "vitest";
 import { buildApp } from "./app.js";
 import { ProjectService } from "./projects/projectService.js";
+import { PipelineChatStore } from "./storage/pipelineChatStore.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import type { MachineClient } from "./machines/machineClient.js";
 import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
+import type { PipelineDecisionDelegate, PipelineRunDelegate, PipelineStatusDelegate } from "./machines/pipelineRoutes.js";
 import { MachineService } from "./machines/machineService.js";
 import { MachineStore } from "./machines/machineStore.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
@@ -25,6 +27,8 @@ interface AppTestContext {
   readonly projectDir: string;
   remoteClient: MachineClient | undefined;
   unitSupervisor: UnitSupervisorDelegate | undefined;
+  pipelineRunner: PipelineRunDelegate | undefined;
+  pipelineCommands: (PipelineStatusDelegate & PipelineDecisionDelegate) | undefined;
   readonly sessionDaemonRequests: CapturedSessionDaemonRequest[];
   readonly piPackageRequests: CapturedPiPackageRequest[];
   readonly workspaceCatalog: AppTestWorkspaceCatalog;
@@ -37,6 +41,8 @@ let tempDir: string | undefined;
 let projectDir: string | undefined;
 let remoteClient: MachineClient | undefined;
 let unitSupervisor: UnitSupervisorDelegate | undefined;
+let pipelineRunner: PipelineRunDelegate | undefined;
+let pipelineCommands: (PipelineStatusDelegate & PipelineDecisionDelegate) | undefined;
 let sessionDaemonRequests: CapturedSessionDaemonRequest[] = [];
 let piPackageRequests: CapturedPiPackageRequest[] = [];
 let workspaceCatalog: AppTestWorkspaceCatalog | undefined;
@@ -68,6 +74,18 @@ export const appTestContext: AppTestContext = {
   set unitSupervisor(client) {
     unitSupervisor = client;
   },
+  get pipelineRunner() {
+    return pipelineRunner;
+  },
+  set pipelineRunner(client) {
+    pipelineRunner = client;
+  },
+  get pipelineCommands() {
+    return pipelineCommands;
+  },
+  set pipelineCommands(client) {
+    pipelineCommands = client;
+  },
   get sessionDaemonRequests() {
     return sessionDaemonRequests;
   },
@@ -98,6 +116,8 @@ export function registerAppTestHooks(): void {
     projectDir = join(tempDir, "project");
     remoteClient = undefined;
     unitSupervisor = undefined;
+    pipelineRunner = undefined;
+    pipelineCommands = undefined;
     sessionDaemonRequests = [];
     piPackageRequests = [];
     piWebConfig = {};
@@ -105,10 +125,14 @@ export function registerAppTestHooks(): void {
     const projects = new ProjectService(new ProjectStore(join(tempDir, "projects.json")));
     const sessionDaemon = fakeSessionDaemon(projects);
     workspaceCatalog = new AppTestWorkspaceCatalog(projects);
+    const pipelineChatStore = new PipelineChatStore(join(tempDir, "pipeline-history.sqlite"));
     app = await buildApp({
+      pipelineChatStore,
       projects,
       workspaceCatalog,
       unitSupervisor: delegatingUnitSupervisor(),
+      pipelineRunner: delegatingPipelineRunner(),
+      pipelineCommands: delegatingPipelineCommands(),
       machines: new MachineService(new MachineStore(join(tempDir, "machines.json")), {
         remoteClientFactory: () => {
           if (remoteClient === undefined) throw new Error("No remote machine client configured");
@@ -152,6 +176,7 @@ export function registerAppTestHooks(): void {
       clientDist: false,
       logger: false,
     });
+    app.addHook("onClose", (_app, done) => { pipelineChatStore.close(); done(); });
     app.addHook("onClose", () => sessionDaemon.close());
   });
 
@@ -183,6 +208,25 @@ function delegatingUnitSupervisor(): UnitSupervisorDelegate {
     addWorktree: (body) => delegate().addWorktree(body),
     unitByCwd: (cwd) => delegate().unitByCwd(cwd),
     unitStatus: (query) => delegate().unitStatus(query),
+  };
+}
+
+function delegatingPipelineRunner(): PipelineRunDelegate {
+  const delegate = (): PipelineRunDelegate => {
+    if (pipelineRunner === undefined) throw new Error("No pipeline runner configured");
+    return pipelineRunner;
+  };
+  return { run: (request) => delegate().run(request) };
+}
+
+function delegatingPipelineCommands(): PipelineStatusDelegate & PipelineDecisionDelegate {
+  const delegate = (): PipelineStatusDelegate & PipelineDecisionDelegate => {
+    if (pipelineCommands === undefined) throw new Error("No pipeline command client configured");
+    return pipelineCommands;
+  };
+  return {
+    status: (runId, execution) => delegate().status(runId, execution),
+    decide: (runId, decision, actor, card) => delegate().decide(runId, decision, actor, card),
   };
 }
 

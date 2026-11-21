@@ -55,6 +55,30 @@ export interface ToolExecutionPart {
   preview?: ToolPreview;
 }
 
+/** The pipeline run's open decision card (question + artifact), rendered in
+ * the run's chat with Approve/Revise buttons. decided/decisionPending are
+ * client-side button state; the pipeline stays the source of truth for
+ * whether a question is open. */
+export interface PipelineDeliveryView {
+  buildDigest: string;
+  reportDigest: string;
+  report?: string;
+  diff?: string;
+}
+
+export interface PipelineDecisionCard {
+  binding?: import("../../../shared/pipelineApproval").PipelineApprovalBinding;
+  questionId: string;
+  artifactSha256: string;
+  revision: number;
+  stage?: string;
+  artifact?: string;
+  reviewNotes?: string;
+  decided?: boolean;
+  historical?: boolean;
+  decisionPending?: boolean;
+}
+
 /** A reference never carries base64; inline images remain compatible with older machines. */
 export type ChatImagePart =
   | { type: "image"; mimeType: string; data: string; mediaId?: never; byteSize?: never }
@@ -70,9 +94,14 @@ export type ChatPart =
   | { type: "toolCall"; toolCallId?: string; toolName: string; summary: string; args?: unknown }
   | ToolExecutionPart
   | { type: "toolResult"; toolCallId?: string; toolName: string; text: string; isError: boolean; content?: unknown; details?: unknown }
+  | { type: "pipelineCard"; runId: string; phase: string; closeStatus?: string; detail?: string; stale?: boolean; delivery?: PipelineDeliveryView; retry?: import("../cachedPipelineRuns").PendingPipelineDecision; card?: PipelineDecisionCard }
   | { type: "empty" };
 
 export interface ChatLine {
+  /** Browser-owned pipeline entry, independent of Pi tree navigation. */
+  pipelineId?: string;
+  pipelineOrder?: number;
+  pipelineVersion?: number;
   /** Durable session-tree entry; absent for optimistic or in-flight messages. */
   entryId?: string;
   role: "user" | "assistant" | "tool" | "system" | "bash" | "skill";
@@ -389,6 +418,8 @@ export const chatStyles = css`
   .msg.user { border-color: var(--pi-accent-border); background: var(--pi-selection-bg); }
   .msg.tool { border-color: var(--pi-warning-border); background: var(--pi-warning-surface); color: var(--pi-warning); }
   .msg.tool-execution-shell, .msg.ask-user-record-shell { padding: 0; border: 0; background: transparent; color: var(--pi-text); }
+  .msg.pipeline-card-shell { padding: 0; border: 0; background: transparent; color: var(--pi-text); }
+  .msg.pipeline-card-shell pipeline-card { margin: 0 auto; max-width: 720px; }
   .msg.ask-user-record-shell ask-user-card { margin: 0 auto; }
   .msg.system { color: var(--pi-danger); }
   .msg.bash { border-color: var(--pi-success); background: var(--pi-success-bg); }

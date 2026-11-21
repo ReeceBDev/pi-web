@@ -2,7 +2,11 @@ import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, t
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorScope, type SessionBrowserErrorOwner } from "../browserErrors";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
+import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding, type PipelineRevisionFeedback } from "../../../shared/pipelineApproval";
+import { serverPipelineHistory, type PipelineChatHistory } from "../pipelineChatHistory";
+import { loadPipelineLines, savePipelineLine, savePipelineDecision, savePipelineExecution, type PendingPipelineDecision, forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun, rememberPipelineSubmission } from "../cachedPipelineRuns";
 import { textMessage } from "../chatMessages";
+import type { ChatLine, ChatPart, PipelineDecisionCard } from "../components/shared";
 import { machineSessionKey } from "../machineKeys";
 import { isCreatingSessionId } from "../route";
 import { clearDraft, moveDraft, saveDraft } from "../promptDraftStorage";
@@ -56,6 +60,7 @@ export interface SelectedSessionReady {
 
 export interface SessionControllerDependencies {
   api?: typeof defaultApi;
+  pipelineHistory?: PipelineChatHistory;
   captureNavigation?: () => NavigationSelection;
   beginNavigationOperation?: (scope: readonly NavigationScope[]) => NavigationFreshness;
   socket?: SessionEventSocket;
@@ -65,6 +70,8 @@ export interface SessionControllerDependencies {
   replacePromptEditorText?: (replacement: PromptEditorTextReplacement) => void | Promise<void>;
   onSelectedSessionReady?: (selection: SelectedSessionReady) => void;
   onModelScopeChanged?: (revision: number) => void;
+  /** Pipeline run-status poll interval (ms). Tests speed it up. */
+  pipelinePollMs?: number;
 }
 
 function isUnitWorktreePath(path: string): boolean {
@@ -107,6 +114,45 @@ interface PendingSessionStart {
   session: ClientPendingStartSessionInfo;
   queuedSends: QueuedPendingSessionSend[];
   discarded: boolean;
+  /** Pipeline launch mode: no backend session is ever created; the first
+   * prompt send POSTs /api/pipeline-runs instead. */
+  pipeline?: boolean;
+  /** Set while a pipeline run launch request is in flight (or succeeded, so
+   * later sends only queue); reset on failure so the next send retries. */
+  pipelineLaunchAttempted?: boolean;
+  pipelineSubmission?: { requestId: string; goal: string };
+  /** The launched pipeline run's id, learned from the launch ack; the target
+   * for the status / approve / revise chat commands. */
+  pipelineRunId?: string;
+  pipelineExecutionRunId?: string;
+  pipelineUnconfirmedDecision?: PendingPipelineDecision;
+  pipelineStale?: boolean;
+  /** Set on pending starts rebuilt from cached pipeline run storage after a
+   * reload: the row reconnects to an already-running run instead of launching
+   * one, and its chat seeds a reconnect note. */
+  pipelineRestored?: boolean;
+  /** Chat lines shown in the pipeline row (goal, launch ack, command notes).
+   * The row has no backend transcript, so this record is the only store;
+   * reselecting the row re-seeds messages from it. */
+  pipelineLines?: ChatLine[];
+  pipelineHistoryId?: string;
+  pipelineHistoryLoaded?: boolean;
+  pipelineHistoryLoading?: boolean;
+  pipelineOutbox?: Map<string, ChatLine>;
+  pipelineSaving?: boolean;
+  /** The live decision-card line: one stable line whose parts are rebuilt on
+   * every status poll. Also lives in pipelineLines. */
+  pipelineCard?: ChatLine;
+  /** Last status view seen by the poll; the card line rebuilds from it when a
+   * decision submit flips local button state. */
+  pipelineLastView?: Record<string, unknown>;
+  /** phase of the last accepted poll; drives phase-transition notes. */
+  pipelineLastPhase?: string;
+  /** `${questionId}@${revision}` keys decided from this client this page
+   * load; keeps the card's buttons disabled after the decision. */
+  pipelineDecidedKeys?: string[];
+  /** The `${questionId}@${revision}` key with a decision request in flight. */
+  pipelineDecideInFlight?: string;
   /**
    * The real session id, learned from the daemon's `session.startup` events
    * long before the create request resolves. It is what lets the startup view
@@ -145,6 +191,7 @@ export interface SessionSelectionOptions {
 export class SessionController {
   private readonly socket: SessionEventSocket;
   private readonly api: typeof defaultApi;
+  private readonly pipelineHistory: PipelineChatHistory | undefined;
   private readonly transcripts: ChatTranscriptStore;
   private readonly notifications: SessionNotificationSessionBridge | undefined;
   private readonly navigateToSession: SessionControllerDependencies["navigateToSession"];
@@ -154,6 +201,10 @@ export class SessionController {
   private readonly captureNavigation: SessionControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: SessionControllerDependencies["beginNavigationOperation"];
   private readonly browserErrors: BrowserErrorReporter;
+  private readonly pipelinePollMs: number;
+  /** Live run-status pollers keyed by run id; stopped on close/discard/dispose. */
+  private readonly closedDialogsBySession = new Map<string, ClosedExtensionDialog[]>();
+  private readonly pipelinePollers = new Map<string, ReturnType<typeof setInterval>>();
   private selectionSeq = 0;
   private disposed = false;
   // Join-time stream watermark for the selected session. `seq` is the
@@ -188,6 +239,7 @@ export class SessionController {
   ) {
     this.socket = deps.socket ?? new SessionSocket();
     this.api = deps.api ?? defaultApi;
+    this.pipelineHistory = deps.pipelineHistory ?? (this.api === defaultApi ? serverPipelineHistory : undefined);
     this.transcripts = deps.transcripts ?? new ChatTranscriptStore();
     this.notifications = deps.notifications;
     this.navigateToSession = deps.navigateToSession;
@@ -196,6 +248,7 @@ export class SessionController {
     this.onModelScopeChanged = deps.onModelScopeChanged;
     this.captureNavigation = deps.captureNavigation;
     this.beginNavigationOperation = deps.beginNavigationOperation;
+    this.pipelinePollMs = deps.pipelinePollMs ?? 3000;
     this.browserErrors = new BrowserErrorReporter(getState, setState);
   }
 
@@ -210,6 +263,7 @@ export class SessionController {
 
   dispose() {
     this.disposed = true;
+    for (const runId of [...this.pipelinePollers.keys()]) this.stopPipelinePolling(runId);
     this.selectionSeq += 1;
     this.socket.close();
     this.clearPendingUpdates();
@@ -264,14 +318,24 @@ export class SessionController {
     await this.clearSessionAfterNavigation(this.navigationSelection());
   }
 
-  async startSession(options?: { updateUrl?: boolean | undefined; cwd?: string | undefined; plain?: boolean }) {
-    const workspace = await this.workspaceForNewSession(options?.cwd, options?.plain === true);
-    if (!workspace) return;
+  async startSession(options?: { updateUrl?: boolean | undefined; cwd?: string | undefined; plain?: boolean; pipeline?: boolean }) {
     const machineId = selectedMachineId(this.getState());
-    const pendingUrlPublished = options?.updateUrl !== false;
+    // Pipeline launches are machine-local only (same gate as the supervisor
+    // unit path); a remote-machine "+ New Work" keeps today's flow.
+    const pipeline = options?.pipeline === true && machineId === "local";
+    const workspace = await this.workspaceForNewSession(options?.cwd, options?.plain === true, pipeline);
+    if (!workspace) return;
+    const pendingUrlPublished = options?.updateUrl !== false && !pipeline;
     const pending = this.createPendingSessionStart(workspace, machineId, this.navigationSelection(), pendingUrlPublished);
+    if (pipeline) pending.pipeline = true;
     this.pendingSessionStarts.set(pending.tempId, pending);
     this.insertAndSelectPendingSession(pending.session, { updateUrl: options?.updateUrl });
+    if (pipeline) {
+      // Pipeline rows exist client-side only: no backend session is created.
+      // The launch itself remembers the run in cachedPipelineRuns storage, so
+      // the row is rebuilt after a reload and keeps driving the run.
+      return;
+    }
     // Persist the row before the backend answers: a reload mid-start (mobile tab
     // discard) otherwise loses the session entirely — the client never learned
     // its id and empty sessions are invisible to server listings.
@@ -302,15 +366,17 @@ export class SessionController {
    * (session supervisor create) so the new chat runs in the unit's primary
    * worktree. Supervisor failures fall back to the plain local session. The
    * path swap happens before the pending start so selection, navigation, and
-   * queued sends all target the unit workspace from the first published row. */
-  private async workspaceForNewSession(cwd: string | undefined, plain: boolean): Promise<Workspace | undefined> {
+   * queued sends all target the unit workspace from the first published row.
+   * Pipeline launches skip the supervisor entirely: the chat row opens on the
+   * repo workspace and the run is launched on the first send. */
+  private async workspaceForNewSession(cwd: string | undefined, plain: boolean, pipeline: boolean): Promise<Workspace | undefined> {
     const state = this.getState();
     const listed = cwd === undefined
       ? state.selectedWorkspace
       : listedWorkspaceForPath(state, cwd) ?? shellWorkspaceForPath(state.selectedWorkspace, cwd);
     if (!listed) return undefined;
     const machineId = selectedMachineId(state);
-    if (plain || machineId !== "local" || isUnitWorktreePath(listed.path)) return listed;
+    if (plain || pipeline || machineId !== "local" || isUnitWorktreePath(listed.path)) return listed;
     try {
       const unit = await this.api.supervisorUnit(listed.path);
       if (unit.unit !== undefined) return listed;
@@ -382,7 +448,7 @@ export class SessionController {
       activity: session.archived === true ? undefined : this.getState().sessionActivities[session.id],
       pendingAsk: session.archived === true ? undefined : this.getState().sessionStatuses[session.id]?.pendingAsk,
       pendingDialogs: session.archived === true ? [] : (this.getState().sessionStatuses[session.id]?.pendingDialogs ?? []),
-      closedDialogs: [],
+      closedDialogs: this.closedDialogsBySession.get(this.sessionCacheKey(session.id)) ?? [],
       availableThinkingLevels: [],
     });
     let socketConnected = false;
@@ -529,16 +595,403 @@ export class SessionController {
       return;
     }
     const queued: QueuedPendingSessionSend = { ...input, id: `pending-send-${String(++this.pendingQueuedSendSeq)}` };
+    const pipelineCommand = pending.pipeline === true && pending.pipelineLaunchAttempted === true ? pipelineCommandOf(queued) : undefined;
+    if (pipelineCommand !== undefined) {
+      // A launched pipeline row has no backend transcript to receive prompts;
+      // status / approve / revise drive the run instead of queueing.
+      void this.runPipelineCommand(pending, queued, pipelineCommand);
+      return;
+    }
+    if (pending.pipeline === true && pending.pipelineLaunchAttempted === true) {
+      // A launched pipeline row has no backend session that could ever
+      // consume further sends; free text gets an honest note, not a queue.
+      this.appendPipelineLines(pending, [
+        textMessage("user", queued.text),
+        textMessage("system", "This chat drives the pipeline run · decide on the run's cards"),
+      ]);
+      return;
+    }
     pending.queuedSends.push(queued);
     const state = this.getState();
     const current = state.clientQueuedSessionMessages[session.id] ?? [];
-    const activity = creatingPendingSessionActivity(session.id, pending.queuedSends.length);
+    const activity = pending.pipeline === true
+      ? pipelineLaunchPendingActivity(session.id)
+      : creatingPendingSessionActivity(session.id, pending.queuedSends.length);
     this.setState({
       clientQueuedSessionMessages: { ...state.clientQueuedSessionMessages, [session.id]: [...current, queuedSessionMessagePreview(queued)] },
       sessionActivities: { ...state.sessionActivities, [session.id]: activity },
       activity: state.selectedSession?.id === session.id ? activity : state.activity,
       error: "",
     });
+    if (pending.pipeline === true) this.maybeLaunchPipelineRun(pending, queued);
+  }
+
+  /** Launch the pipeline run for a pending row's first prompt send. The
+   * message is NOT prompt-fed into any backing session; the run ack (or
+   * failure) renders as a system note in the open chat. */
+  private maybeLaunchPipelineRun(pending: PendingSessionStart, queued: QueuedPendingSessionSend): void {
+    if (queued.type !== "prompt" || pending.pipelineLaunchAttempted === true) return;
+    pending.pipelineLaunchAttempted = true;
+    void this.launchPipelineRun(pending, queued);
+  }
+
+  private async launchPipelineRun(pending: PendingSessionStart, queued: QueuedPendingSessionSend): Promise<void> {
+    const text = queued.type === "prompt" ? queued.text : "";
+    let launched = false;
+    let line: ChatLine;
+    try {
+      const submission = (pending.pipelineSubmission ??= { requestId: crypto.randomUUID(), goal: text });
+      pending.pipelineHistoryId = submission.requestId;
+      this.appendPipelineLines(pending, [{ ...textMessage("user", text), ...(submission.goal === text ? { pipelineId: "goal" } : {}) }]);
+      if (submission.goal !== text) throw new Error("This submission already has a goal. Resend the original message to retry, or use New Work for a different task.");
+      if (!rememberPipelineSubmission({ runId: `run-${submission.requestId}`, requestId: submission.requestId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId })) {
+        throw new Error("Could not save this submission for safe retry. Check browser storage and try again.");
+      }
+      const result = await this.api.pipelineRun(pending.cwd, text, submission.requestId);
+      launched = result.ok;
+      if (result.ok) {
+        pending.pipelineRunId = result.projectRunId;
+        this.saveServerChat(pending, pending.pipelineLines ?? []);
+        if (isPipelineExecutionId(result.executionRunId)) pending.pipelineExecutionRunId = result.executionRunId;
+        rememberPipelineRun({ ...(pending.pipelineExecutionRunId !== undefined ? { executionRunId: pending.pipelineExecutionRunId } : {}), runId: result.projectRunId, requestId: submission.requestId, cwd: pending.cwd, goal: text, created: new Date().toISOString(), machineId: pending.machineId });
+      }
+      line = result.ok
+        ? textMessage("system", `Pipeline run started · ${result.projectRunId} · decision cards post here`)
+        : result.reason === "chat_save_pending"
+          ? textMessage("system", result.detail)
+          : textMessage("system", `Pipeline run failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
+    } catch (error) {
+      line = textMessage("system", `Pipeline run failed · ${errorMessage(error)}`);
+    }
+    if (!launched) pending.pipelineLaunchAttempted = false;
+    const index = pending.queuedSends.indexOf(queued);
+    if (index >= 0) pending.queuedSends.splice(index, 1);
+    this.dropNextQueuedSessionMessage(pending.tempId);
+    if (launched) {
+      if (pending.pipelineExecutionRunId !== undefined) this.promotePipelineRow(pending);
+      this.showPipelineRunActivity(pending);
+      this.startPipelinePolling(pending);
+    }
+    this.appendPipelineLines(pending, [line]);
+  }
+
+  private promotePipelineRow(pending: PendingSessionStart): void {
+    const runId = pending.pipelineRunId;
+    if (runId === undefined || pending.discarded || pending.tempId === runId) return;
+    const tempId = pending.tempId;
+    const state = this.getState();
+    const session = { ...pending.session, id: runId, path: "pi-web://pipeline-run/" + runId };
+    pending.tempId = runId;
+    pending.session = session;
+    this.pendingSessionStarts.delete(tempId);
+    this.pendingSessionStarts.set(runId, pending);
+    const selected = state.selectedSession?.id === tempId;
+    const sessionActivities = Object.fromEntries(Object.entries(state.sessionActivities).filter(([id]) => id !== tempId));
+    this.setState({
+      sessions: state.sessions.map((row) => row.id === tempId ? session : row),
+      sessionActivities,
+      ...(selected ? { selectedSession: session } : {}),
+    });
+    if (selected) {
+      this.sessionSelection.rememberSession({ ...session, cwd: this.workspaceSelectionKey(session.cwd) });
+      this.updateUrl({ replace: true });
+    }
+  }
+
+  /** After a successful launch the row's activity names the run — the old
+   * "Creating session · waiting for the backend session" label would lie
+   * forever, because a pipeline row never gets a backend session. */
+  private showPipelineRunActivity(pending: PendingSessionStart): void {
+    if (pending.discarded || pending.pipelineRunId === undefined) return;
+    const activity = pipelineRunActivity(pending.tempId, pending.pipelineRunId);
+    const state = this.getState();
+    this.setState({
+      sessionActivities: { ...state.sessionActivities, [pending.tempId]: activity },
+      activity: state.selectedSession?.id === pending.tempId ? activity : state.activity,
+    });
+  }
+
+  /** Commit each visible change to its run even when another chat is selected. */
+  private appendPipelineLines(pending: PendingSessionStart, lines: ChatLine[]): void {
+    if (pending.discarded) return;
+    const history = pending.pipelineHistoryId ?? pending.pipelineRunId;
+    const transcript = [...(pending.pipelineLines ?? [])];
+    const changes: ChatLine[] = [];
+    let saved = true;
+    for (const input of lines) {
+      const id = input.pipelineId ?? crypto.randomUUID();
+      const index = transcript.findIndex(row => row.pipelineId === id);
+      const old = transcript[index];
+      if (old && JSON.stringify(old.parts) === JSON.stringify(input.parts)) continue;
+      const stamp = old?.meta?.timestamp ?? input.meta?.timestamp ?? new Date().toISOString();
+      const order = old?.pipelineOrder ?? Math.max(Date.now() * 1000, (transcript.at(-1)?.pipelineOrder ?? 0) + 1);
+      const version = Math.max(Date.now() * 1000, (old?.pipelineVersion ?? old?.pipelineOrder ?? 0) + 1);
+      const line = { ...input, pipelineId: id, pipelineOrder: order, pipelineVersion: version, meta: { ...input.meta, timestamp: stamp } };
+      if (index < 0) transcript.push(line);
+      else transcript[index] = line;
+      changes.push(line);
+      if (history !== undefined && !savePipelineLine(pending.machineId, history, line)) saved = false;
+    }
+    if (changes.length === 0) return;
+    pending.pipelineLines = transcript;
+    this.saveServerChat(pending, changes);
+    if (this.getState().selectedSession?.id === pending.tempId) {
+      this.setState({ messages: transcript, ...(!saved ? { error: "The local chat cache is full or unavailable." } : {}) });
+    }
+  }
+
+  /** Send changed rows in order. A failed batch stays queued for the next save or reopen. */
+  private saveServerChat(pending: PendingSessionStart, lines: ChatLine[]): void {
+    const store = this.pipelineHistory;
+    const run = pending.pipelineRunId;
+    if (!store || run === undefined || pending.discarded) return;
+    const outbox = pending.pipelineOutbox ??= new Map();
+    for (const row of lines) if (row.pipelineId !== undefined) outbox.set(row.pipelineId, row);
+    if (pending.pipelineSaving === true || outbox.size === 0) return;
+    pending.pipelineSaving = true;
+    void (async () => {
+      try {
+        while (outbox.size && !pending.discarded) {
+          const batch: ChatLine[] = [];
+          let bytes = 0;
+          for (const row of outbox.values()) {
+            const length = new TextEncoder().encode(JSON.stringify(row)).length;
+            if (batch.length > 0 && (batch.length >= 32 || bytes + length > 1024 * 1024)) break;
+            batch.push(row);
+            bytes += length;
+          }
+          await store.save(run, batch);
+          for (const row of batch) if (row.pipelineId !== undefined && outbox.get(row.pipelineId) === row) outbox.delete(row.pipelineId);
+        }
+      } catch {
+        if (this.getState().selectedSession?.id === pending.tempId) this.setState({ error: "Server chat save is pending. Reopening this run will retry." });
+      } finally { pending.pipelineSaving = false; }
+    })();
+  }
+
+  private loadServerChat(pending: PendingSessionStart): void {
+    const store = this.pipelineHistory;
+    const run = pending.pipelineRunId;
+    if (run === undefined || !store || pending.pipelineHistoryLoaded === true || pending.pipelineHistoryLoading === true || pending.discarded) return;
+    pending.pipelineHistoryLoading = true;
+    void store.load(run).then(saved => {
+      if (pending.discarded || this.disposed) return;
+      const local = pending.pipelineLines ?? [];
+      const rows = new Map(local.map(row => [row.pipelineId, row]));
+      const fetched: ChatLine[] = [];
+      for (const stored of saved) {
+        const cached = rows.get(stored.pipelineId);
+        let row = stored;
+        if (cached) {
+          const useStoredBody = cached !== pending.pipelineCard &&
+            ((stored.pipelineVersion ?? 0) > (cached.pipelineVersion ?? 0) || (stored.pipelineId === "goal" && cached.pipelineVersion === 0));
+          if (!useStoredBody) {
+            // A live status can beat history back to a fresh browser. Keep its controls
+            // but put the card at the original time and position recorded by the server.
+            if (stored.pipelineId === "goal" && stored.pipelineVersion === 0) continue;
+            if (stored.pipelineOrder === undefined || stored.meta?.timestamp === undefined ||
+                (stored.pipelineOrder === cached.pipelineOrder && stored.meta.timestamp === cached.meta?.timestamp)) continue;
+            row = { ...cached, pipelineOrder: stored.pipelineOrder, meta: { ...cached.meta, timestamp: stored.meta.timestamp } };
+            if (cached === pending.pipelineCard) pending.pipelineCard = row;
+          }
+        }
+        rows.set(row.pipelineId, row);
+        fetched.push(row);
+      }
+      if (fetched.length) {
+        const merged = [...rows.values()].sort((a, b) => (a.pipelineOrder ?? 0) - (b.pipelineOrder ?? 0));
+        pending.pipelineLines = merged;
+        for (const row of fetched) savePipelineLine(pending.machineId, pending.pipelineHistoryId ?? run, row);
+        if (this.getState().selectedSession?.id === pending.tempId) this.setState({ messages: merged });
+      }
+      pending.pipelineHistoryLoaded = true;
+      const acknowledged = new Map(saved.map(row => [row.pipelineId, row.pipelineVersion ?? 0]));
+      this.saveServerChat(pending, [...rows.values()].filter(row => !acknowledged.has(row.pipelineId) || (row.pipelineVersion ?? 0) > (acknowledged.get(row.pipelineId) ?? 0)));
+    }).catch(() => {
+      if (this.getState().selectedSession?.id === pending.tempId) this.setState({ error: "Server chat history is unavailable. Showing the saved browser copy." });
+    }).finally(() => { pending.pipelineHistoryLoading = false; });
+  }
+
+  /** One-shot status / approve / revise against the launched run. The command
+   * itself is never queued; its result renders as a system note. */
+  private async runPipelineCommand(pending: PendingSessionStart, queued: QueuedPendingSessionSend, command: "status" | "approve" | "revise"): Promise<void> {
+    const text = queued.type === "prompt" ? queued.text : "";
+    const runId = pending.pipelineRunId;
+    this.appendPipelineLines(pending, [textMessage("user", text)]);
+    let line: ChatLine;
+    if (runId === undefined) {
+      line = textMessage("system", "Pipeline command failed · no run id recorded for this chat");
+    } else if (command === "status") {
+      const view = pending.pipelineLastView;
+      line = textMessage("system", view ? "Pipeline status · " + runId + " · " + pipelineStatusSummary(view) : "Waiting for pipeline status");
+    } else {
+      const part = pending.pipelineCard?.parts[0];
+      if (part?.type !== "pipelineCard" || !part.card?.binding || part.card.artifact === undefined) {
+        line = textMessage("system", "Open and review the current decision card before deciding.");
+      } else if (command === "revise") {
+        line = textMessage("system", "Open the decision card and enter the correction you want the next worker to make.");
+      } else {
+        await this.submitPipelineDecision(command, runId, part.card.binding);
+        return;
+      }
+    }
+    this.appendPipelineLines(pending, [line]);
+  }
+
+  /** Poll a launched run's status: the latest view renders as the row's
+   * decision card (artifact visible, Approve/Revise buttons), phase
+   * transitions append notes, a closed run appends its close status and stops
+   * the poller. Drives the run from the UI — typed status/approve/revise
+   * commands stay as a fallback, never a requirement. */
+  private startPipelinePolling(pending: PendingSessionStart): void {
+    const runId = pending.pipelineRunId;
+    if (runId === undefined || this.pipelinePollers.has(runId) || this.disposed) return;
+    let inFlight = false;
+    const tick = () => {
+      if (pending.discarded || this.disposed) {
+        this.stopPipelinePolling(runId);
+        return;
+      }
+      if (inFlight) return;
+      inFlight = true;
+      void this.pollPipelineRun(pending, runId).finally(() => { inFlight = false; });
+    };
+    this.pipelinePollers.set(runId, setInterval(tick, this.pipelinePollMs));
+    tick();
+  }
+
+  private stopPipelinePolling(runId: string): void {
+    const timer = this.pipelinePollers.get(runId);
+    if (timer !== undefined) {
+      clearInterval(timer);
+      this.pipelinePollers.delete(runId);
+    }
+  }
+
+  private async pollPipelineRun(pending: PendingSessionStart, runId: string): Promise<void> {
+    let view: Record<string, unknown>;
+    try {
+      const result = await this.api.pipelineRunStatus(runId, pending.pipelineExecutionRunId);
+      if (!result.ok) throw new Error(result.reason);
+      view = result.view;
+      if ((typeof view["runId"] === "string" && view["runId"] !== runId) ||
+          (pending.pipelineExecutionRunId !== undefined && view["executionRunId"] !== pending.pipelineExecutionRunId)) {
+        throw new Error("Pipeline status belongs to a different execution");
+      }
+    } catch {
+      if (!pending.discarded && !this.disposed && pending.pipelineStale !== true) {
+        pending.pipelineStale = true;
+        if (pending.pipelineLastView) this.updatePipelineCardLine(pending, runId, pending.pipelineLastView);
+        else if (this.getState().selectedSession?.id === pending.tempId) this.setState({ error: "Live pipeline status is unavailable." });
+      }
+      return;
+    }
+    if (pending.discarded || this.disposed) return;
+    if (pending.pipelineExecutionRunId === undefined && isPipelineExecutionId(view["executionRunId"])) {
+      pending.pipelineExecutionRunId = view["executionRunId"];
+      savePipelineExecution(runId, pending.machineId, view["executionRunId"]);
+    }
+    pending.pipelineStale = false;
+    if (this.getState().selectedSession?.id === pending.tempId && this.getState().error === "Live pipeline status is unavailable.") this.setState({ error: "" });
+    pending.pipelineLastView = view;
+    this.appendPipelineLines(pending, agentActivityLines(view["agentActivity"]));
+    const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
+    if (phase === "CLOSED") {
+      this.stopPipelinePolling(runId);
+      if (pending.pipelineLastPhase !== "CLOSED") {
+        pending.pipelineLastPhase = "CLOSED";
+        const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : "unknown";
+        this.appendPipelineLines(pending, [{ ...textMessage("system", `Pipeline run closed · ${closeStatus}`), pipelineId: "closed:" + (pending.pipelineExecutionRunId ?? runId) }]);
+      }
+    } else if (pending.pipelineLastPhase !== undefined && pending.pipelineLastPhase !== phase) {
+      pending.pipelineLastPhase = phase;
+      this.appendPipelineLines(pending, [textMessage("system", `Pipeline phase · ${phase}`)]);
+    } else {
+      pending.pipelineLastPhase = phase;
+    }
+    this.updatePipelineCardLine(pending, runId, view);
+  }
+
+  /** Refresh a single request in place. A different request gets its own chat entry. */
+  private updatePipelineCardLine(pending: PendingSessionStart, runId: string, view: Record<string, unknown>): void {
+    const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
+    const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : undefined;
+    const card = pipelineCardOf(pending, view);
+    const finalPhase = typeof view["finalPhase"] === "string" ? view["finalPhase"] : undefined;
+    const block = optionalPipelineRecord(view, "block");
+    const output = optionalPipelineRecord(view, "delivery");
+    const delivery = output && typeof output["buildDigest"] === "string" && typeof output["reportDigest"] === "string" &&
+      view["status"] === "completed" ? {
+        buildDigest: output["buildDigest"], reportDigest: output["reportDigest"],
+        ...(typeof output["report"] === "string" ? { report: output["report"] } : {}),
+        ...(typeof output["diff"] === "string" ? { diff: output["diff"] } : {}),
+      } : undefined;
+    const detail = typeof block?.["reason"] === "string" ? (finalPhase ?? phase) + " blocked · " + block["reason"]
+      : view["action"] === "revising-modules" ? "Waiting for a revised module plan"
+      : view["status"] === "diagnostic" ? "Selected phases finished"
+      : delivery ? "Verified delivery" : finalPhase;
+    const part: ChatPart = {
+      type: "pipelineCard", runId, phase, stale: pending.pipelineStale === true,
+      ...(closeStatus === undefined ? {} : { closeStatus }), ...(card === undefined ? {} : { card }),
+      ...(detail === undefined ? {} : { detail }), ...(delivery === undefined ? {} : { delivery }),
+      ...(pending.pipelineUnconfirmedDecision === undefined ? {} : { retry: pending.pipelineUnconfirmedDecision }),
+    };
+    const key = card ? "card:" + JSON.stringify(card.binding ?? [view["executionRunId"], card.stage, card.questionId, card.revision, card.artifactSha256]) : "phase:" + phase;
+    const old = pending.pipelineCard;
+    const prior = old?.parts[0];
+    if (old && old.pipelineId !== key && prior?.type === "pipelineCard" && prior.card) {
+      const archived = { ...prior };
+      delete archived.retry;
+      this.appendPipelineLines(pending, [{ ...old, parts: [{ ...archived, card: { ...prior.card, historical: true, decisionPending: false } }] }]);
+    }
+    this.appendPipelineLines(pending, [{ pipelineId: key, role: "system", parts: [part] }]);
+    const active = pending.pipelineLines?.find(line => line.pipelineId === key);
+    if (active) pending.pipelineCard = active;
+  }
+
+  /** Approve/revise the open card from its buttons (the card UI, not typed
+   * commands). Receipt renders as a note; the decided question's buttons stay
+   * disabled until a new revision (or question) opens. */
+  async submitPipelineDecision(decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<void> {
+    const session = this.getState().selectedSession;
+    const pending = session === undefined ? undefined : this.pendingSessionStarts.get(session.id);
+    if (pending?.pipelineRunId !== runId || pending.discarded || pending.pipelineDecideInFlight !== undefined) return;
+    const key = JSON.stringify(binding);
+    const cardPart = pending.pipelineCard?.parts[0];
+    const card = cardPart?.type === "pipelineCard" ? cardPart.card : undefined;
+    const unconfirmed = pending.pipelineUnconfirmedDecision;
+    const retrying = unconfirmed?.decision === decision && JSON.stringify(unconfirmed.binding) === key;
+    const current = card?.artifact !== undefined && JSON.stringify(card.binding) === key && pending.pipelineStale !== true;
+    if (unconfirmed ? !retrying : !current || (pending.pipelineDecidedKeys ?? []).includes(key)) return;
+    const submission = unconfirmed ?? { binding, decision, ...(feedback ? { feedback } : {}) };
+    if (!savePipelineDecision(runId, pending.machineId, submission)) {
+      this.appendPipelineLines(pending, [textMessage("system", "Could not save the approval identity for a safe retry.")]);
+      return;
+    }
+    pending.pipelineUnconfirmedDecision = submission;
+    pending.pipelineDecideInFlight = key;
+    const view = pending.pipelineLastView;
+    if (view) this.updatePipelineCardLine(pending, runId, view);
+    try {
+      const result = submission.feedback ? await this.api.pipelineRunDecision(runId, decision, binding, submission.feedback)
+        : await this.api.pipelineRunDecision(runId, decision, binding);
+      if (result.ok || (result.reason === "stale-card" || result.reason === "invalid-feedback")) {
+        savePipelineDecision(runId, pending.machineId, undefined);
+        delete pending.pipelineUnconfirmedDecision;
+      }
+      if (result.ok) pending.pipelineDecidedKeys = [...(pending.pipelineDecidedKeys ?? []), key];
+      this.appendPipelineLines(pending, [result.ok
+        ? textMessage("system", "Pipeline decision accepted · " + pipelineDecisionSummary(result.receipt))
+        : textMessage("system", "Pipeline decision could not be confirmed · " + result.reason + (result.detail !== "" ? " · " + result.detail : ""))]);
+    } catch (error) {
+      this.appendPipelineLines(pending, [textMessage("system", "Pipeline decision acknowledgement pending · " + errorMessage(error))]);
+    } finally {
+      delete pending.pipelineDecideInFlight;
+      const latest = pending.pipelineLastView;
+      if (!this.disposed && this.pendingSessionStarts.get(pending.tempId) === pending) {
+        this.updatePipelineCardLine(pending, runId, latest ?? { phase: "STARTING" });
+      }
+    }
   }
 
   private async flushQueuedPendingSends(session: SessionInfo, machineId: string, queuedSends: readonly QueuedPendingSessionSend[], errorOwner: SessionBrowserErrorOwner): Promise<void> {
@@ -946,9 +1399,10 @@ export class SessionController {
       // and then discarding the fetched list would lose not-yet-persisted
       // sessions once the stale catalog snapshot is reused without a refetch.
       if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
-      const listedSessions = mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
-        .filter((session) => !this.isSuppressedCreatedSession(session, machineId));
+      const listedSessions = mergePipelineRuns(workspace.path, mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
+        .filter((session) => !this.isSuppressedCreatedSession(session, machineId)), machineId);
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
+      this.registerRestoredPipelineStarts(sessions, workspace, machineId);
       const selectedSession = this.getState().selectedSession;
       this.setState({
         sessions,
@@ -984,6 +1438,7 @@ export class SessionController {
       });
     }
     forgetCachedNewSession(session.id, selectedMachineId(this.getState()));
+    forgetPipelineRun(pendingStart?.pipelineRunId ?? (pendingStart?.pipelineSubmission ? `run-${pendingStart.pipelineSubmission.requestId}` : session.id), selectedMachineId(this.getState()));
     clearDraft(this.sessionCacheKey(session.id));
     clearStagedAttachments(this.sessionCacheKey(session.id));
     const state = this.getState();
@@ -1284,19 +1739,14 @@ export class SessionController {
     const machineId = selectedMachineId(state);
     const errorOwner = this.captureSessionErrorOwner(session);
     const selectionSeq = this.selectionSeq;
+    const original = state.pendingDialogs.find(dialog => dialog.dialogId === dialogId);
     try {
       const response = await close(session, machineId);
-      if (!this.isCurrentSessionSelection(session.id, machineId, selectionSeq)) return;
-      // When this call closed the dialog, its outcome is recorded right away so
-      // the card shows what the user gave; the daemon's dialog.closed event
-      // then finds the dialog already closed here and stays a no-op.
-      const outcome: ExtensionDialogOutcome | undefined = response.outcome;
-      if (outcome !== undefined) {
-        const dialog = this.getState().pendingDialogs.find((pending) => pending.dialogId === outcome.dialogId);
-        if (dialog !== undefined) this.recordClosedDialog({ dialog, reason: outcome.reason, ...(outcome.answer === undefined ? {} : { answer: outcome.answer }) });
+      const outcome = response.outcome;
+      if (original && outcome?.dialogId === dialogId) {
+        this.recordClosedDialog({ dialog: original, reason: outcome.reason, ...(outcome.answer === undefined ? {} : { answer: outcome.answer }) }, session.id, machineId);
       }
-      // Both outcomes carry the recomputed status, so no follow-up status
-      // request is needed to learn what the session's open dialogs are now.
+      if (!this.isCurrentSessionSelection(session.id, machineId, selectionSeq)) return;
       this.applyStatus(response.sessionStatus);
     } catch (error) {
       this.reportSessionError(session, machineId, error, errorOwner);
@@ -1628,10 +2078,69 @@ export class SessionController {
     return { tempId, originWorkspace: workspace, workspaceId: workspace.id, cwd: workspace.path, machineId, expectedNavigation, pendingUrlPublished, session, queuedSends: [], discarded: false };
   }
 
+  /** Register live pending starts for every restored pipeline run row in a
+   * workspace listing, so its status / approve / revise routing works. Called
+   * from every path that builds the workspace session list
+   * (refreshCurrentWorkspaceSessions and workspaceController.selectWorkspace). */
+  registerRestoredPipelineStarts(sessions: readonly SessionInfo[], workspace: Workspace, machineId: string): void {
+    for (const session of sessions) {
+      if (isRestoredPipelineRunSession(session) && !this.pendingSessionStarts.has(session.id)) {
+        this.registerRestoredPipelineStart(session, workspace, machineId);
+      }
+    }
+  }
+
+  /** A pipeline run row restored from cachedPipelineRuns storage after a
+   * reload: register the pending start that routes its status / approve /
+   * revise sends against the still-running (or closed) run. */
+  private registerRestoredPipelineStart(session: ClientPendingStartSessionInfo, workspace: Workspace, machineId: string): void {
+    const restored = isRestoredPipelineRunSession(session) ? session : undefined;
+    if (restored === undefined) return;
+    const pending: PendingSessionStart = {
+      tempId: session.id,
+      originWorkspace: workspace,
+      workspaceId: workspace.id,
+      cwd: session.cwd,
+      machineId,
+      expectedNavigation: this.navigationSelection(),
+      pendingUrlPublished: false,
+      session,
+      queuedSends: [],
+      discarded: false,
+      pipeline: true,
+      pipelineLaunchAttempted: restored.pipelineSubmission === undefined,
+      ...(restored.pipelineSubmission ? { pipelineSubmission: restored.pipelineSubmission } : { pipelineRunId: restored.pipelineRunId }),
+      ...(restored.pipelineExecutionRunId !== undefined ? { pipelineExecutionRunId: restored.pipelineExecutionRunId } : {}),
+      ...(restored.pipelinePendingDecision ? { pipelineUnconfirmedDecision: restored.pipelinePendingDecision } : {}),
+      pipelineRestored: true,
+      pipelineHistoryId: restored.pipelineHistoryId,
+    };
+    this.pendingSessionStarts.set(session.id, pending);
+    if (pending.pipelineRunId !== undefined) {
+      this.showPipelineRunActivity(pending);
+    }
+  }
+
+  private restoreCachedChat(pending: PendingSessionStart, session: SessionInfo): void {
+    pending.pipelineLines = loadPipelineLines(pending.machineId, pending.pipelineHistoryId ?? session.id);
+    if (!pending.pipelineLines.some(line => line.pipelineId === "goal") && session.firstMessage) {
+      // The catalog knows the original goal time. Keep this legacy seed in memory
+      // until the stored row arrives, without creating a new message on reopen.
+      pending.pipelineLines.unshift({ ...textMessage("user", session.firstMessage), pipelineId: "goal",
+        pipelineOrder: Date.parse(session.created) * 1000, pipelineVersion: 0, meta: { timestamp: session.created } });
+    }
+    if (pending.pipelineSubmission && !pending.pipelineLines.some(row => row.pipelineId === "submission-pending")) {
+      this.appendPipelineLines(pending, [{ ...textMessage("system", "Submission not yet confirmed. Resend this goal to retry safely."), pipelineId: "submission-pending" }]);
+    }
+    const lastPart = [...pending.pipelineLines].reverse().find(line => line.parts[0]?.type === "pipelineCard")?.parts[0];
+    if (lastPart?.type === "pipelineCard") pending.pipelineLastPhase = lastPart.phase;
+  }
+
   private insertAndSelectPendingSession(session: ClientPendingStartSessionInfo, options?: { updateUrl?: boolean | undefined }): void {
     const state = this.getState();
+    const pending = this.pendingSessionStarts.get(session.id);
     this.selectClientPendingStartSession(session, {
-      activity: creatingPendingSessionActivity(session.id),
+      activity: pending?.pipeline === true ? pipelineLaunchPendingActivity(session.id) : creatingPendingSessionActivity(session.id),
       sessions: [session, ...state.sessions.filter((candidate) => candidate.id !== session.id)],
       updateUrl: options?.updateUrl,
     });
@@ -1646,11 +2155,13 @@ export class SessionController {
     this.clearPendingUpdates();
     const state = this.getState();
     const pendingStart = this.pendingSessionStarts.get(session.id);
-    const activity = options?.activity ?? state.sessionActivities[session.id] ?? (pendingStart !== undefined ? creatingPendingSessionActivity(session.id, pendingStart.queuedSends.length) : undefined);
+    const activity = options?.activity ?? state.sessionActivities[session.id] ?? (pendingStart !== undefined ? (pendingStart.pipeline === true ? pipelineLaunchPendingActivity(session.id) : creatingPendingSessionActivity(session.id, pendingStart.queuedSends.length)) : undefined);
+    if (pendingStart?.pipelineRestored === true && pendingStart.pipelineLines === undefined) this.restoreCachedChat(pendingStart, session);
+    const pipelineSeed = pendingStart?.pipelineLines ?? [];
     this.setState({
       sessions: options?.sessions ?? (state.sessions.some((candidate) => candidate.id === session.id) ? state.sessions : [session, ...state.sessions]),
       selectedSession: session,
-      messages: [],
+      messages: pipelineSeed,
       messagePageStart: 0,
       messagePageEnd: 0,
       messagePageTotal: 0,
@@ -1659,12 +2170,18 @@ export class SessionController {
       activity,
       pendingAsk: undefined,
       pendingDialogs: [],
-      closedDialogs: [],
+      closedDialogs: this.closedDialogsBySession.get(this.sessionCacheKey(session.id)) ?? [],
       availableThinkingLevels: [],
       treeDialog: undefined,
       ...(activity === undefined ? {} : { sessionActivities: { ...state.sessionActivities, [session.id]: activity } }),
       error: "",
     });
+    if (pendingStart?.pipelineRunId !== undefined) {
+      if (state.selectedSession?.id !== session.id) delete pendingStart.pipelineHistoryLoaded;
+      this.loadServerChat(pendingStart);
+      this.saveServerChat(pendingStart, []);
+    }
+    if (pendingStart?.pipelineRunId !== undefined && (pendingStart.pipelineLastPhase !== "CLOSED" || pendingStart.pipelineUnconfirmedDecision)) this.startPipelinePolling(pendingStart);
     // Re-selecting the row mid-startup re-establishes the constructing
     // session's subscription; the close above dropped it with the old selection.
     if (pendingStart?.backendSessionId !== undefined) this.connectPendingStartSocket(pendingStart);
@@ -2023,20 +2540,27 @@ export class SessionController {
     this.recordClosedDialog({ dialog, reason, ...(answer === undefined ? {} : { answer }) });
   }
 
-  private recordClosedDialog(closed: ClosedExtensionDialog): void {
+  private recordClosedDialog(closed: ClosedExtensionDialog, sessionId = this.getState().selectedSession?.id, machine = selectedMachineId(this.getState())): void {
+    if (sessionId === undefined) return;
+    const key = machineSessionKey(machine, sessionId);
     const state = this.getState();
-    if (state.closedDialogs.some((entry) => entry.dialog.dialogId === closed.dialog.dialogId)) return;
-    this.setState({
-      pendingDialogs: state.pendingDialogs.filter((pending) => pending.dialogId !== closed.dialog.dialogId),
-      closedDialogs: [...state.closedDialogs, closed],
+    const visible = state.selectedSession?.id === sessionId && selectedMachineId(state) === machine;
+    const previous = this.closedDialogsBySession.get(key) ?? (visible ? state.closedDialogs : []);
+    if (previous.some(entry => entry.dialog.dialogId === closed.dialog.dialogId)) return;
+    const dialogs = [...previous, closed];
+    this.closedDialogsBySession.set(key, dialogs);
+    if (visible) this.setState({
+      pendingDialogs: state.pendingDialogs.filter(pending => pending.dialogId !== closed.dialog.dialogId),
+      closedDialogs: dialogs,
     });
   }
 
-  /** Drop a closed dialog's transient outcome card (e.g. the user dismissed it). */
   dismissClosedDialog(dialogId: string): void {
     const state = this.getState();
-    if (!state.closedDialogs.some((entry) => entry.dialog.dialogId === dialogId)) return;
-    this.setState({ closedDialogs: state.closedDialogs.filter((entry) => entry.dialog.dialogId !== dialogId) });
+    if (!state.selectedSession || !state.closedDialogs.some(entry => entry.dialog.dialogId === dialogId)) return;
+    const dialogs = state.closedDialogs.filter(entry => entry.dialog.dialogId !== dialogId);
+    this.closedDialogsBySession.set(this.sessionCacheKey(state.selectedSession.id), dialogs);
+    this.setState({ closedDialogs: dialogs });
   }
 
   private applyOpenedAsk(ask: PendingAskUser): void {
@@ -2391,6 +2915,29 @@ function pendingStartActivity(activity: SessionActivity, sessionId: string): Ses
   };
 }
 
+function pipelineRunActivity(sessionId: string, runId: string): SessionActivity {
+  return {
+    sessionId,
+    phase: "active",
+    label: "Pipeline run",
+    detail: `${runId} · send status / approve / revise`,
+    at: new Date().toISOString(),
+  };
+}
+
+/** A pipeline row before its first send: nothing is being created or booted —
+ * the run only starts when the user sends the first message, so the generic
+ * "Creating session · waiting for the backend session" wording would lie. */
+function pipelineLaunchPendingActivity(sessionId: string): SessionActivity {
+  return {
+    sessionId,
+    phase: "active",
+    label: "Pipeline launch pending",
+    detail: "Nothing is booting — send a message to start the pipeline run",
+    at: new Date().toISOString(),
+  };
+}
+
 function creatingPendingSessionActivity(sessionId: string, queuedCount = 0): SessionActivity {
   return {
     sessionId,
@@ -2481,3 +3028,88 @@ function isSessionNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.toLowerCase().includes("session not found");
 }
 
+
+/** Map a queued prompt send to a pipeline command, or undefined when the
+ * text is not one. Only consulted after the run launch was attempted. */
+function pipelineCommandOf(queued: QueuedPendingSessionSend): "status" | "approve" | "revise" | undefined {
+  if (queued.type !== "prompt") return undefined;
+  const text = queued.text.trim().toLowerCase();
+  if (text === "status" || text === "run status") return "status";
+  if (text === "approve") return "approve";
+  if (text === "revise") return "revise";
+  return undefined;
+}
+
+/** The view's open decision card as render state: fields read defensively
+ * (the view is a loose record), decided/decisionPending resolved from the
+ * pending row's local decision bookkeeping. */
+function pipelineCardOf(pending: PendingSessionStart, view: Record<string, unknown>): PipelineDecisionCard | undefined {
+  const record = optionalPipelineRecord(view, "card");
+  if (record === undefined) return undefined;
+  const questionId = record["questionId"];
+  const revision = record["revision"];
+  const artifactSha256 = record["artifactSha256"];
+  if (typeof questionId !== "string" || questionId === "" || typeof revision !== "number" || typeof artifactSha256 !== "string") return undefined;
+  const binding = readPipelineApproval({ ...record, rootExecutionId: view["executionRunId"] });
+  const key = JSON.stringify(binding);
+  const stage = record["stage"];
+  const artifact = record["artifact"];
+  return {
+    questionId,
+    artifactSha256,
+    revision,
+    ...(typeof stage === "string" ? { stage } : {}),
+    ...(binding ? { binding } : {}),
+    ...(typeof artifact === "string" ? { artifact } : {}),
+    ...(typeof record["reviewNotes"] === "string" ? { reviewNotes: record["reviewNotes"] } : {}),
+    decided: (pending.pipelineDecidedKeys ?? []).includes(key),
+    decisionPending: pending.pipelineDecideInFlight === key,
+  };
+}
+
+/** Human line for the run-status CLI view: live phase (+ card revision) or
+ * the terminal close status. */
+function agentActivityLines(value: unknown): ChatLine[] {
+  if (!Array.isArray(value)) return [];
+  const lines: ChatLine[] = [];
+  const events: unknown[] = value;
+  for (const event of events) {
+    if (!isPlainPipelineRecord(event)) continue;
+    const { id, timestamp, summary, role } = event;
+    if (typeof id !== "string" || typeof timestamp !== "string" || !Number.isFinite(Date.parse(timestamp)) ||
+        typeof summary !== "string" || (role !== "worker" && role !== "nanny")) continue;
+    const actor = role === "worker" ? "Worker" : "Nanny";
+    lines.push({ ...textMessage("system", actor + " · " + summary), pipelineId: "activity:" + id, meta: { timestamp } });
+  }
+  return lines;
+}
+
+function pipelineStatusSummary(view: Record<string, unknown>): string {
+  const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
+  const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : undefined;
+  const card = optionalPipelineRecord(view, "card");
+  const revision = card !== undefined && typeof card["revision"] === "number" ? ` · card rev ${String(card["revision"])}` : "";
+  return `${phase}${closeStatus === undefined ? "" : ` (${closeStatus})`}${revision}`;
+}
+
+/** The optional Record-valued field of a response payload, or undefined. */
+function optionalPipelineRecord(payload: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const value = payload[key];
+  return isPlainPipelineRecord(value) ? value : undefined;
+}
+
+function isPlainPipelineRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Human line for an approval receipt (accepted or rejected). */
+function pipelineDecisionSummary(receipt: Record<string, unknown>): string {
+  if (receipt["accepted"] === true) {
+    const decision = typeof receipt["decision"] === "string" ? receipt["decision"] : "decision";
+    const decisionId = typeof receipt["decisionId"] === "string" ? receipt["decisionId"] : "";
+    return `${decision} · ${decisionId}`;
+  }
+  const reason = typeof receipt["reason"] === "string" ? receipt["reason"] : "rejected";
+  const detail = typeof receipt["detail"] === "string" ? receipt["detail"] : "";
+  return `rejected · ${reason}${detail === "" ? "" : ` · ${detail}`}`;
+}

@@ -25,6 +25,8 @@ import type { ChatLine, ChatPart } from "./shared";
 import { chatStyles, renderSessionWarningIcon } from "./shared";
 import "./AskUserCard";
 import "./ExtensionDialogCard";
+import "./PipelineCard";
+import type { PipelineDecideCallback } from "./PipelineCard";
 import type { ExtensionDialogAnswerCallback, ExtensionDialogCancelCallback, ExtensionDialogDismissCallback } from "./ExtensionDialogCard";
 import { registerRenderedModal, type RenderedModalRegistration } from "./modalLayerRegistry";
 import "./ConversationMeter";
@@ -190,6 +192,8 @@ export class ChatView extends LitElement {
   @property({ attribute: false }) pendingAsk?: PendingAskUser;
   @property({ attribute: false }) askDraftSessionId = "";
   @property({ attribute: false }) onSubmitAsk?: (askId: string, submission: AskUserSubmission) => void | Promise<void>;
+  /** Approve/revise the pipeline run's open decision card (card buttons, not typed commands). */
+  @property({ attribute: false }) onPipelineDecide?: PipelineDecideCallback;
   @property({ attribute: false }) pendingDialogs: PendingExtensionDialog[] = [];
   @property({ attribute: false }) closedDialogs: ClosedExtensionDialog[] = [];
   @property({ attribute: false }) onAnswerDialog?: ExtensionDialogAnswerCallback;
@@ -677,14 +681,14 @@ export class ChatView extends LitElement {
 
   private renderOpenAsk() {
     if (this.pendingAsk === undefined) return null;
-    return html`
+    return keyed(JSON.stringify([this.machineId, this.sessionId, this.pendingAsk.askId]), html`
       <ask-user-card
         data-scroll-anchor-id=${`ask:${this.pendingAsk.askId}`}
         .ask=${this.pendingAsk}
         .draftSessionId=${this.askDraftSessionId}
         .onSubmit=${this.onSubmitAsk}
       ></ask-user-card>
-    `;
+    `);
   }
 
   private renderExtensionDialogs() {
@@ -704,7 +708,7 @@ export class ChatView extends LitElement {
           ></extension-dialog-card>
         `,
       )}
-      ${open === undefined ? null : html`
+      ${open === undefined ? null : keyed(JSON.stringify([this.machineId, this.sessionId, open.dialogId]), html`
         <extension-dialog-card
           class="open-dialog-card"
           data-scroll-anchor-id=${`dialog:${open.dialogId}`}
@@ -715,7 +719,7 @@ export class ChatView extends LitElement {
         ${queuedCount > 0
           ? html`<p class="queued-dialogs" role="status">${String(queuedCount)} more extension ${queuedCount === 1 ? "dialog" : "dialogs"} queued</p>`
           : null}
-      `}
+      `)}
     `;
   }
 
@@ -796,14 +800,20 @@ export class ChatView extends LitElement {
   private renderMessage(message: ChatLine, index: number) {
     const toolOnly = this.isToolExecutionOnlyMessage(message);
     const askUserRecordOnly = this.isAskUserRecordOnlyMessage(message);
-    const shellClass = toolOnly ? "msg tool-execution-shell" : "msg ask-user-record-shell";
+    const pipelineCardOnly = this.isPipelineCardOnlyMessage(message);
+    const shellClass = toolOnly ? "msg tool-execution-shell" : pipelineCardOnly ? "msg pipeline-card-shell" : "msg ask-user-record-shell";
+    const bare = toolOnly || askUserRecordOnly || pipelineCardOnly;
     return html`
       ${this.renderScrollMarker(this.messageScrollMarkerId(index))}
-      <article class=${toolOnly || askUserRecordOnly ? shellClass : `msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index)}>
-        ${toolOnly || askUserRecordOnly ? null : this.renderMessageHeader(message, String(index))}
+      <article class=${bare ? shellClass : `msg ${message.role}`} data-index=${index} data-scroll-anchor-id=${this.messageAnchorKey(index)}>
+        ${bare ? null : this.renderMessageHeader(message, String(index))}
         ${message.parts.map((part, partIndex) => this.renderPart(part, message, index, partIndex))}
       </article>
     `;
+  }
+
+  private isPipelineCardOnlyMessage(message: ChatLine): boolean {
+    return message.parts.length > 0 && message.parts.every((part) => part.type === "pipelineCard");
   }
 
   private renderToolImageOutput(message: ChatLine, index: number, toolName?: string) {
@@ -979,6 +989,20 @@ export class ChatView extends LitElement {
         .outcome=${part.outcome}
         .draftSessionId=${this.askDraftSessionId}
       ></ask-user-card>
+    `;
+    if (part.type === "pipelineCard") return html`
+      <pipeline-card
+        class="part"
+        .runId=${part.runId}
+        .phase=${part.phase}
+        .closeStatus=${part.closeStatus}
+        .detail=${part.detail}
+        .stale=${part.stale ?? false}
+        .delivery=${part.delivery}
+        .retry=${part.retry}
+        .card=${part.card}
+        .onDecide=${this.onPipelineDecide}
+      ></pipeline-card>
     `;
     if (part.type === "image") {
       return html`<pi-web-transcript-image class="part chat-image" .imagePart=${part}
