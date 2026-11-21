@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding } from "../../shared/pipelineApproval.js";
 import type { PipelineChatStore } from "../storage/pipelineChatStore.js";
@@ -21,9 +21,9 @@ import type { FastifyInstance } from "fastify";
  * {ok:false, reason, detail} (exit nonzero).
  */
 
-export const DEFAULT_PIPELINE_START_RUN_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/start-run.js";
-export const DEFAULT_PIPELINE_STATUS_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/run-status.js";
-export const DEFAULT_PIPELINE_DECIDE_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/approve-run.js";
+export const DEFAULT_PIPELINE_START_RUN_SCRIPT = join(process.env["PI_PROJECT_DIR"] || join(homedir(), "pi"), "pipeline", "dist", "scripts", "start-run.js");
+export const DEFAULT_PIPELINE_STATUS_SCRIPT = join(process.env["PI_PROJECT_DIR"] || join(homedir(), "pi"), "pipeline", "dist", "scripts", "run-status.js");
+export const DEFAULT_PIPELINE_DECIDE_SCRIPT = join(process.env["PI_PROJECT_DIR"] || join(homedir(), "pi"), "pipeline", "dist", "scripts", "approve-run.js");
 const PIPELINE_ACTOR = "rbowen";
 const RUN_ID_RE = /^[A-Za-z0-9._:-]+$/;
 
