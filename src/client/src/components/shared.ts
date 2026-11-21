@@ -73,6 +73,7 @@ export interface PipelineDecisionCard {
   revision: number;
   stage?: string;
   artifact?: string;
+  reviewNotes?: string;
   decided?: boolean;
   historical?: boolean;
   decisionPending?: boolean;

@@ -81,13 +81,14 @@ export class PipelineCard extends LitElement {
       ${card.artifact === undefined
         ? html`<p class="artifact-missing">artifact ${card.artifactSha256.slice(0, 12)}… (content unavailable)</p>`
         : html`<details class="artifact"><summary>artifact</summary><pre>${card.artifact}</pre></details>`}
+      ${card.reviewNotes ? html`<details class="artifact" ?open=${card.stage === "modules"}><summary>${card.stage === "modules" ? "Revision review" : "Requirement and example IDs"}</summary><pre>${card.reviewNotes}</pre></details>` : null}
       ${card.decided === true || card.historical === true
         ? html`<p class="decided" role="status">${card.decided === true ? "Decided · recorded" : "Previous request"}</p>`
         : html`
           ${this.editingRevision ? html`<label>What needs to change?
             <textarea required maxlength="4000" .value=${this.reason} @input=${(e: Event) => { if (e.currentTarget instanceof HTMLTextAreaElement) this.reason = e.currentTarget.value; }}></textarea></label>
-            ${card.stage === "modules" ? html`<label>Affected requirement, demo or interface ID (optional)
-              <input maxlength="240" .value=${this.acceptanceRef} @input=${(e: Event) => { if (e.currentTarget instanceof HTMLInputElement) this.acceptanceRef = e.currentTarget.value; }}></label>` : null}` : null}
+            <label>${card.stage === "modules" ? "Affected requirement, demo or interface ID (optional). To dispute a field, use interface/ID#/errorSemantics or demo/ID#/functionalExample/then." : "Affected goal, acceptance or example ID (optional)."}
+              <input maxlength="240" .value=${this.acceptanceRef} @input=${(e: Event) => { if (e.currentTarget instanceof HTMLInputElement) this.acceptanceRef = e.currentTarget.value; }}></label>` : null}
           <div class="actions">
             <button class="decide-approve" ?disabled=${disabled} @click=${() => void this.decide("approve", card.binding)}>Approve</button>
             <button class="decide-revise" ?disabled=${disabled || (this.editingRevision && !this.reason.trim())}

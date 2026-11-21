@@ -3061,6 +3061,7 @@ function pipelineCardOf(pending: PendingSessionStart, view: Record<string, unkno
     ...(typeof stage === "string" ? { stage } : {}),
     ...(binding ? { binding } : {}),
     ...(typeof artifact === "string" ? { artifact } : {}),
+    ...(typeof record["reviewNotes"] === "string" ? { reviewNotes: record["reviewNotes"] } : {}),
     decided: (pending.pipelineDecidedKeys ?? []).includes(key),
     decisionPending: pending.pipelineDecideInFlight === key,
   };

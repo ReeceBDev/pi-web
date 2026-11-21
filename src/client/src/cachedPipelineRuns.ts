@@ -255,6 +255,7 @@ export function readSavedPipelineLine(value: unknown): SavedPipelineLine | undef
       part.card = { historical: true, questionId: card["questionId"], artifactSha256: card["artifactSha256"], revision: card["revision"],
         ...(card["decided"] === true ? { decided: true } : {}), ...(binding ? { binding } : {}),
         ...(typeof card["stage"] === "string" ? { stage: card["stage"] } : {}),
+        ...(typeof card["reviewNotes"] === "string" ? { reviewNotes: card["reviewNotes"] } : {}),
         ...(typeof card["artifact"] === "string" ? { artifact: card["artifact"] } : {}) };
     }
   } else return undefined;
