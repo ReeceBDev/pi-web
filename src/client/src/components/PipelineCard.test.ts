@@ -2,13 +2,20 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PipelineCard } from "./PipelineCard";
+import type { PipelineApprovalBinding } from "../../../shared/pipelineApproval";
 import type { PipelineDecisionCard } from "./shared";
+
+const execution = "01a1f777-e9fe-777d-b157-8cd6e797d35a";
+const binding = {
+  rootExecutionId: execution, targetExecutionId: execution, stage: "sketches" as const,
+  questionId: "sketch-approval", revision: 1, artifactSha256: "a".repeat(64),
+};
 
 afterEach(() => {
   document.body.replaceChildren();
 });
 
-async function mount(card?: PipelineDecisionCard, onDecide?: (decision: "approve" | "revise") => void | Promise<void>): Promise<PipelineCard> {
+async function mount(card?: PipelineDecisionCard, onDecide?: (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding) => void | Promise<void>): Promise<PipelineCard> {
   const element = new PipelineCard();
   element.runId = "run-1";
   element.phase = "AWAITING_SKETCH_APPROVAL";
@@ -33,7 +40,7 @@ function button(root: ShadowRoot, selector: string): HTMLButtonElement {
 
 describe("pipeline-card", () => {
   it("renders the open question with its artifact and both decision buttons", async () => {
-    const element = await mount({ questionId: "sketch-approval", artifactSha256: "664ef460", revision: 1, stage: "sketches", artifact: "{\"goal\":\"hello world\"}" });
+    const element = await mount({ questionId: "sketch-approval", artifactSha256: binding.artifactSha256, binding, revision: 1, stage: "sketches", artifact: "{\"goal\":\"hello world\"}" });
     const root = rootOf(element);
     expect(root.querySelector(".q-label")?.textContent).toContain("sketch-approval");
     expect(root.querySelector(".artifact pre")?.textContent).toContain("hello world");
@@ -44,11 +51,11 @@ describe("pipeline-card", () => {
 
   it("calls back with the pressed decision", async () => {
     const onDecide = vi.fn();
-    const element = await mount({ questionId: "sketch-approval", artifactSha256: "664ef460", revision: 1 }, onDecide);
+    const element = await mount({ questionId: "sketch-approval", artifactSha256: binding.artifactSha256, binding, artifact: "goal", revision: 1 }, onDecide);
     const root = rootOf(element);
     button(root, ".decide-approve").click();
     await element.updateComplete;
-    expect(onDecide).toHaveBeenCalledWith("approve");
+    expect(onDecide).toHaveBeenCalledWith("approve", "run-1", binding);
   });
 
   it("disables the buttons once the question is decided", async () => {

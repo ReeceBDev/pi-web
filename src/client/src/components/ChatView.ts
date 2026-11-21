@@ -681,14 +681,14 @@ export class ChatView extends LitElement {
 
   private renderOpenAsk() {
     if (this.pendingAsk === undefined) return null;
-    return html`
+    return keyed(JSON.stringify([this.machineId, this.sessionId, this.pendingAsk.askId]), html`
       <ask-user-card
         data-scroll-anchor-id=${`ask:${this.pendingAsk.askId}`}
         .ask=${this.pendingAsk}
         .draftSessionId=${this.askDraftSessionId}
         .onSubmit=${this.onSubmitAsk}
       ></ask-user-card>
-    `;
+    `);
   }
 
   private renderExtensionDialogs() {
@@ -708,7 +708,7 @@ export class ChatView extends LitElement {
           ></extension-dialog-card>
         `,
       )}
-      ${open === undefined ? null : html`
+      ${open === undefined ? null : keyed(JSON.stringify([this.machineId, this.sessionId, open.dialogId]), html`
         <extension-dialog-card
           class="open-dialog-card"
           data-scroll-anchor-id=${`dialog:${open.dialogId}`}
@@ -719,7 +719,7 @@ export class ChatView extends LitElement {
         ${queuedCount > 0
           ? html`<p class="queued-dialogs" role="status">${String(queuedCount)} more extension ${queuedCount === 1 ? "dialog" : "dialogs"} queued</p>`
           : null}
-      `}
+      `)}
     `;
   }
 
@@ -996,6 +996,10 @@ export class ChatView extends LitElement {
         .runId=${part.runId}
         .phase=${part.phase}
         .closeStatus=${part.closeStatus}
+        .detail=${part.detail}
+        .stale=${part.stale ?? false}
+        .delivery=${part.delivery}
+        .retry=${part.retry}
         .card=${part.card}
         .onDecide=${this.onPipelineDecide}
       ></pipeline-card>

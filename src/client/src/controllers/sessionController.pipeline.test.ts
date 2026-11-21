@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatLine } from "../components/shared";
 import { initialAppState } from "../appState";
 import { createMemoryStorage } from "../cachedNewSessions";
 import { setPipelineRunStorageOverrideForTests } from "../cachedPipelineRuns";
@@ -23,7 +24,16 @@ function makeController(api: typeof defaultApi, initialState: AppState, deps: Se
   return { controller, get state() { return state; } };
 }
 
+const execution = "01a1f777-e9fe-777d-b157-8cd6e797d35a";
+const binding = {
+  rootExecutionId: execution, targetExecutionId: execution, stage: "sketches" as const,
+  questionId: "sketch-approval", revision: 1, artifactSha256: "a".repeat(64),
+};
+const openView = { phase: "AWAITING_SKETCH_APPROVAL", executionRunId: execution, card: { ...binding, artifact: "hello world" } };
+
 describe("SessionController pipeline launches (+ New Work)", () => {
+  beforeEach(() => { setPipelineRunStorageOverrideForTests(createMemoryStorage()); });
+  afterEach(() => { setPipelineRunStorageOverrideForTests(undefined); });
   it("opens the chat row instantly on the repo workspace without supervisor or backend session calls", async () => {
     const calls = { supervisorUnit: 0, supervisorCreateUnit: 0, startSession: 0, pipelineRun: 0 };
     const api: typeof defaultApi = {
@@ -55,6 +65,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       prompt: (session) => { promptCalls.push(session.id); return Promise.resolve({ accepted: true }); },
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: openView }),
       pipelineRun: (repoPath, goal) => {
         pipelineRunCalls += 1;
         expect(repoPath).toBe("/repo");
@@ -75,6 +86,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(harness.state.messages.map((line) => `${line.role}:${line.parts[0]?.type === "text" ? line.parts[0].text : "?"}`)).toEqual([
       "user:Build the flinger fix",
       "system:Pipeline run started · run-42 · decision cards post here",
+      "system:?",
     ]);
     expect(harness.state.clientQueuedSessionMessages[tempId ?? ""]).toBeUndefined();
   });
@@ -82,6 +94,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
   it("keeps the launched chat when the user tabs away and back to the row", async () => {
     const api: typeof defaultApi = {
       ...defaultApi,
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: openView }),
       pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
     };
     const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] });
@@ -102,6 +115,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(harness.state.messages.map((line) => `${line.role}:${line.parts[0]?.type === "text" ? line.parts[0].text : "?"}`)).toEqual([
       "user:Build the flinger fix",
       "system:Pipeline run started · run-42 · decision cards post here",
+      "system:?",
     ]);
   });
 
@@ -124,7 +138,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     await harness.controller.send("status");
     await flush();
 
-    expect(statusCalls).toEqual(["run-42", "run-42"]); // immediate poll + the typed status
+    expect(statusCalls).toEqual(["run-42"]); // status reuses the current observation
     expect(harness.state.messages.map((line) => `${line.role}:${line.parts[0]?.type === "text" ? line.parts[0].text : "?"}`)).toEqual([
       "user:Build the flinger fix",
       "system:Pipeline run started · run-42 · decision cards post here",
@@ -140,6 +154,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: openView }),
       pipelineRunDecision: (runId, decision) => {
         decisions.push([runId, decision]);
         return Promise.resolve({ ok: true, receipt: { accepted: true, decision, decisionId: "dec-approve-1-x" } });
@@ -175,14 +190,17 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     await flush();
 
     const lastNote = harness.state.messages.at(-1)?.parts[0];
-    expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline decision failed · no-open-card");
+    expect(lastNote?.type === "text" && lastNote.text).toBe("Open and review the current decision card before deciding.");
   });
 
-  it("renders a failed launch and lets the next send retry", async () => {
+  it("retries a failed launch with the same persisted identity and original goal", async () => {
+    const requestIds: string[] = [];
     let pipelineRunCalls = 0;
     const api: typeof defaultApi = {
       ...defaultApi,
-      pipelineRun: () => {
+      pipelineRun: (_repoPath, goal, requestId) => {
+        requestIds.push(requestId);
+        expect(goal).toBe("First attempt");
         pipelineRunCalls += 1;
         return pipelineRunCalls === 1
           ? Promise.resolve({ ok: false, reason: "temporal_unreachable", detail: "connect ECONNREFUSED 127.0.0.1:7233" })
@@ -199,12 +217,60 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     const firstNote = harness.state.messages.at(-1)?.parts[0];
     expect(firstNote?.type === "text" && firstNote.text).toBe("Pipeline run failed · temporal_unreachable · connect ECONNREFUSED 127.0.0.1:7233");
 
-    await harness.controller.send("Second attempt");
+    await harness.controller.send("First attempt");
     await flush();
 
     expect(pipelineRunCalls).toBe(2);
-    const lastNote = harness.state.messages.at(-1)?.parts[0];
-    expect(lastNote?.type === "text" && lastNote.text).toBe("Pipeline run started · run-7 · decision cards post here");
+    expect(requestIds[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(requestIds[1]).toBe(requestIds[0]);
+    expect(harness.state.messages.some((line) => line.parts[0]?.type === "text" && line.parts[0].text === "Pipeline run started · run-7 · decision cards post here")).toBe(true);
+  });
+
+  it("restores an uncertain submission after reload without sending, then retries the same identity", async () => {
+    const ids: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([]),
+      pipelineRun: (_repoPath, goal, requestId) => {
+        expect(goal).toBe("Repair the parser");
+        ids.push(requestId);
+        if (ids.length === 1) return Promise.reject(new Error("response lost"));
+        return Promise.resolve({ ok: true, projectRunId: `run-${requestId}` });
+      },
+    };
+    const first = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    await first.controller.startSession({ pipeline: true });
+    await first.controller.send("Repair the parser");
+    await flush();
+
+    const second = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    await second.controller.refreshCurrentWorkspaceSessions();
+    const restored = second.state.sessions.find((row) => row.id === `run-${ids[0] ?? ""}`);
+    if (restored === undefined) throw new Error("uncertain submission was lost on reload");
+    await second.controller.selectSession(restored);
+    expect(ids).toHaveLength(1);
+    await second.controller.send("A different task");
+    await flush();
+    expect(ids).toHaveLength(1);
+    await second.controller.send("Repair the parser");
+    await flush();
+    expect(ids).toEqual([ids[0], ids[0]]);
+    expect(second.state.activity?.detail).toContain(`run-${ids[0] ?? ""}`);
+  });
+
+  it("does not send when the submission identity cannot be saved", async () => {
+    const storage = createMemoryStorage();
+    storage.setItem = () => { throw new Error("storage full"); };
+    setPipelineRunStorageOverrideForTests(storage);
+    let calls = 0;
+    const harness = makeController({ ...defaultApi, pipelineRun: () => { calls++; return Promise.resolve({ ok: true, projectRunId: "unreachable" }); } }, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    await harness.controller.startSession({ pipeline: true });
+    await harness.controller.send("Repair the parser");
+    await flush();
+    expect(calls).toBe(0);
+    const note = harness.state.messages.at(-1)?.parts[0];
+    expect(note?.type === "text" && note.text).toContain("Could not save this submission");
+    expect(harness.state.clientQueuedSessionMessages[harness.state.selectedSession?.id ?? ""] ?? []).toHaveLength(0);
   });
 
   it("keeps the plain (+ Non-Sandboxed) flow on the backend session path", async () => {
@@ -278,10 +344,98 @@ describe("SessionController pipeline launches (+ New Work)", () => {
 
       await second.controller.send("status");
       await flush();
-      expect(statusCalls).toEqual(["run-77", "run-77", "run-77"]); // launch poll, restore poll, typed status
+      expect(statusCalls).toEqual(["run-77", "run-77"]); // launch and restore polls
     } finally {
       setPipelineRunStorageOverrideForTests(undefined);
     }
+  });
+
+  it("reopens the saved conversation while status is offline and keeps each question and edit once", async () => {
+    const activity = { id: "pair/entry/0", role: "worker", timestamp: "2026-11-20T12:34:56Z", summary: "Editing src/main.ts" };
+    let module = false;
+    const api: typeof defaultApi = { ...defaultApi, sessions: () => Promise.resolve([]),
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-history", executionRunId: execution }),
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: { ...openView, agentActivity: [activity],
+        card: module ? { ...openView.card, stage: "modules", revision: 2, questionId: "module-split", artifact: "Two modules" } : openView.card } }),
+    };
+    const state = () => ({ ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] });
+    const first = makeController(api, state(), { pipelinePollMs: 8 });
+    const second = makeController({ ...api, pipelineRunStatus: () => Promise.reject(new Error("status offline")) }, state());
+    try {
+      await first.controller.startSession({ pipeline: true });
+      await first.controller.send("Build the parser");
+      await vi.waitFor(() => { expect(first.state.messages.some(row => row.parts[0]?.type === "pipelineCard")).toBe(true); });
+      await first.controller.send("status");
+      module = true;
+      await vi.waitFor(() => { expect(first.state.messages.filter(row => row.parts[0]?.type === "pipelineCard")).toHaveLength(2); });
+      const saved = first.state.messages.map(row => [row.pipelineId, row.meta?.timestamp]);
+      expect(saved.every(([id, time]) => typeof id === "string" && typeof time === "string")).toBe(true);
+      expect(saved.filter(([id]) => id === "activity:" + activity.id)).toEqual([["activity:" + activity.id, activity.timestamp]]);
+      first.controller.dispose();
+      await second.controller.refreshCurrentWorkspaceSessions();
+      const restored = second.state.sessions.find(row => row.id === "run-history");
+      if (!restored) throw new Error("saved run missing");
+      await second.controller.selectSession(restored);
+      await second.controller.selectSession(oldSession);
+      await second.controller.selectSession(restored);
+      expect(second.state.messages.map(row => [row.pipelineId, row.meta?.timestamp])).toEqual(saved);
+      const cards = second.state.messages.flatMap(row => row.parts).filter(part => part.type === "pipelineCard");
+      expect(cards.map(part => part.card?.artifact)).toEqual(["hello world", "Two modules"]);
+      expect(cards.every(part => part.card?.historical === true)).toBe(true);
+    } finally { first.controller.dispose(); second.controller.dispose(); }
+  });
+
+  it("restores server messages when the browser chat cache is empty and status cannot respond", async () => {
+    const { serverPipelineRows } = await import("../cachedPipelineRuns");
+    const run = "run-reopen", timestamp = "2026-11-20T16:00:00Z";
+    const saved = { role: "system" as const, pipelineId: "event-7", pipelineOrder: 7, meta: { timestamp }, parts: [{ type: "text" as const, text: "Worker finished writing src/main.ts" }] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve(serverPipelineRows([{ runId: run, requestId: "request-1", cwd: workspace.path, goal: "Write the app", created: timestamp }], workspace.path)),
+      pipelineRunStatus: () => new Promise(() => { /* simulate a status request that never completes */ }),
+    };
+    const loaded: string[] = [];
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, {
+      pipelineHistory: { load: id => { loaded.push(id); return Promise.resolve([saved]); }, save: () => Promise.resolve() },
+    });
+    try {
+      await harness.controller.refreshCurrentWorkspaceSessions();
+      const row = harness.state.sessions.find(candidate => candidate.id === run);
+      if (!row) throw new Error("persisted chat missing from catalog");
+      await harness.controller.selectSession(row);
+      await vi.waitFor(() => { expect(harness.state.messages.some(line => line.pipelineId === saved.pipelineId && line.meta?.timestamp === timestamp)).toBe(true); });
+      expect(loaded).toEqual([run]);
+    } finally { harness.controller.dispose(); }
+  });
+
+  it("preserves the saved card timestamp when live status arrives before its history page", async () => {
+    const { serverPipelineRows } = await import("../cachedPipelineRuns");
+    const run = "run-card-time", timestamp = "2026-11-19T14:33:22Z";
+    let finish: (rows: ChatLine[]) => void = () => { throw new Error("history was not requested"); };
+    const history = new Promise<ChatLine[]>(resolve => { finish = resolve; });
+    const api: typeof defaultApi = { ...defaultApi,
+      sessions: () => Promise.resolve(serverPipelineRows([{ runId: run, cwd: workspace.path, goal: "Write the app", created: timestamp }], workspace.path)),
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: openView }),
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, {
+      pipelineHistory: { load: () => history, save: () => Promise.resolve() },
+    });
+    try {
+      await harness.controller.refreshCurrentWorkspaceSessions();
+      const session = harness.state.sessions.find(candidate => candidate.id === run);
+      if (!session) throw new Error("saved chat missing");
+      await harness.controller.selectSession(session);
+      await vi.waitFor(() => { expect(harness.state.messages.some(row => row.parts[0]?.type === "pipelineCard")).toBe(true); });
+      const shown = harness.state.messages.find(row => row.parts[0]?.type === "pipelineCard");
+      if (!shown) throw new Error("live card missing");
+      finish([{ ...shown, meta: { timestamp }, pipelineOrder: Date.parse(timestamp) * 1000, pipelineVersion: 1 }]);
+      await vi.waitFor(() => {
+        const cards = harness.state.messages.filter(row => row.parts[0]?.type === "pipelineCard");
+        expect(cards).toHaveLength(1);
+        expect(cards[0]?.meta?.timestamp).toBe(timestamp);
+        expect(cards[0]?.parts[0]).toMatchObject({ card: { binding }, stale: false });
+      });
+    } finally { harness.controller.dispose(); }
   });
 
   it("renders the live decision card from the status poll and approves from the card, not typed text", async () => {
@@ -291,7 +445,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-9" }),
       pipelineRunStatus: () => Promise.resolve({
         ok: true,
-        view: { phase: "AWAITING_SKETCH_APPROVAL", card: { questionId: "sketch-approval", artifactSha256: "664e", revision: 1, stage: "sketches", artifact: "{\"goal\":\"hello world\"}" } },
+        view: openView,
       }),
       pipelineRunDecision: (runId, decision) => {
         decisions.push([runId, decision]);
@@ -312,7 +466,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       expect(part.card.questionId).toBe("sketch-approval");
       expect(part.card.artifact).toContain("hello world");
 
-      await harness.controller.submitPipelineDecision("approve");
+      await harness.controller.submitPipelineDecision("approve", "run-9", binding);
       await flush();
 
       expect(decisions).toEqual([["run-9", "approve"]]);
@@ -323,6 +477,53 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       expect(decidedPart.card.decided).toBe(true);
     } finally {
       harness.controller.dispose();
+    }
+  });
+
+  it("retries the exact saved approval after a lost response, reload, and terminal status", async () => {
+    const seen: unknown[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([]),
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-approval", executionRunId: execution }),
+      pipelineRunStatus: (_run, pinned) => {
+        expect(pinned).toBe(execution);
+        return Promise.resolve({ ok: true, view: seen.length === 0 ? openView : {
+          phase: "CLOSED", closeStatus: "COMPLETED", status: "completed",
+          finalPhase: "SUBMITTED", executionRunId: execution, delivery: { buildDigest: "commit", reportDigest: "report", diff: "+hello" },
+        } });
+      },
+      pipelineRunDecision: (run, decision, card) => {
+        seen.push([run, decision, card]);
+        return seen.length === 1
+          ? Promise.reject(new Error("response lost"))
+          : Promise.resolve({ ok: true, receipt: { accepted: true, decision, decisionId: "durable" } });
+      },
+    };
+    const first = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    const second = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    try {
+      await first.controller.startSession({ pipeline: true });
+      await first.controller.send("Repair the parser");
+      await flush();
+      expect(first.state.selectedSession?.id).toBe("run-approval");
+      await first.controller.submitPipelineDecision("approve", "run-approval", { ...binding, revision: 9 });
+      expect(seen).toEqual([]);
+      await first.controller.submitPipelineDecision("approve", "run-approval", binding);
+      await second.controller.refreshCurrentWorkspaceSessions();
+      const row = second.state.sessions.find((entry) => entry.id === "run-approval");
+      if (!row) throw new Error("saved pipeline row not restored");
+      await second.controller.selectSession(row);
+      await flush();
+      const cards = second.state.messages.flatMap(line => line.parts).filter(part => part.type === "pipelineCard");
+      expect(cards[0]).toMatchObject({ card: { binding, historical: true } });
+      expect(cards.find(part => part.phase === "CLOSED"))
+        .toMatchObject({ delivery: { diff: "+hello" }, retry: { decision: "approve", binding } });
+      await second.controller.submitPipelineDecision("approve", "run-approval", binding);
+      expect(seen).toEqual([["run-approval", "approve", binding], ["run-approval", "approve", binding]]);
+    } finally {
+      first.controller.dispose();
+      second.controller.dispose();
     }
   });
 

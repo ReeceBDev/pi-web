@@ -1,8 +1,10 @@
+import type { PipelineApprovalBinding } from "../../../shared/pipelineApproval";
 import { parseSessionDefaults } from "../../../shared/sessionDefaults";
 import type { SessionDefaultsUpdate } from "../../../shared/apiTypes";
 import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
+import { serverPipelineRows } from "../cachedPipelineRuns";
 import {
   arrayOf,
   parseAborted,
@@ -237,11 +239,16 @@ export const workspacesApi = {
 };
 
 export const sessionsApi = {
-  sessions: (cwd: string, machineId = "local", options?: { signal?: AbortSignal }) => request(
-    `${machinePrefix(machineId)}/sessions?cwd=${encodeURIComponent(cwd)}`,
-    arrayOf(parseSessionInfo),
-    options?.signal === undefined ? undefined : { signal: options.signal },
-  ),
+  sessions: async (cwd: string, machineId = "local", options?: { signal?: AbortSignal }) => {
+    const init = options?.signal === undefined ? undefined : { signal: options.signal };
+    const listed = request(`${machinePrefix(machineId)}/sessions?cwd=${encodeURIComponent(cwd)}`, arrayOf(parseSessionInfo), init);
+    if (machineId !== "local") return listed;
+    const catalog = request("api/pipeline-chats?" + new URLSearchParams({ cwd }).toString(), data => serverPipelineRows(data, cwd), init)
+      .catch(() => []); // An older or offline web process can still serve the existing session list.
+    const [sessions, runs] = await Promise.all([listed, catalog]);
+    const ids = new Set(sessions.map(session => session.id));
+    return [...runs.filter(run => !ids.has(run.id)), ...sessions];
+  },
   unreadCatalog: (machineId = "local") => request(`${machinePrefix(machineId)}/sessions/unread`, parseSessionUnreadCatalogSnapshot, { cache: "no-store" }),
   acknowledgeUnread: (session: SessionRef, catalogId: string, throughCompletionOrder: number, machineId = "local") => {
     const body: SessionUnreadAcknowledgeRequest = { cwd: session.cwd, catalogId, throughCompletionOrder };
@@ -396,11 +403,14 @@ export const supervisorApi = {
 
 export const pipelineApi = {
   /** Launch a pipeline run on a repo workspace (machine-local only). */
-  pipelineRun: (repoPath: string, goal: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ repoPath, goal }) }),
+  pipelineRun: (repoPath: string, goal: string, requestId: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ requestId, repoPath, goal }), signal: AbortSignal.timeout(24_000) }),
   /** Query a pipeline run's live phase/status card. */
-  pipelineRunStatus: (runId: string) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/status`, parsePipelineRunStatus),
+  pipelineRunStatus: (runId: string, execution?: string) => {
+    const query = execution !== undefined ? "?" + new URLSearchParams({ execution }).toString() : "";
+    return request(`api/pipeline-runs/${encodeURIComponent(runId)}/status${query}`, parsePipelineRunStatus, { signal: AbortSignal.timeout(12_000) });
+  },
   /** Submit a sketch-card decision (approve/revise) to a pipeline run. */
-  pipelineRunDecision: (runId: string, decision: "approve" | "revise") => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision }) }),
+  pipelineRunDecision: (runId: string, decision: "approve" | "revise", card: PipelineApprovalBinding) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision, card }), signal: AbortSignal.timeout(12_000) }),
 } as const;
 
 export const api = {

@@ -7,6 +7,12 @@ import { ChildPipelineCommandClient, ChildPipelineRunClient } from "./machines/p
 
 registerAppTestHooks();
 
+const execution = "01a1f777-e9fe-777d-b157-8cd6e797d35a";
+const binding = {
+  rootExecutionId: execution, targetExecutionId: execution, stage: "sketches" as const,
+  questionId: "sketch-approval", revision: 1, artifactSha256: "a".repeat(64),
+};
+
 /** Stub start-run CLI: records argv + goal-file content, then succeeds or
  * fails depending on STUB_MODE (the child inherits this process's env). */
 async function writeStubScript(dir: string): Promise<string> {
@@ -51,7 +57,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: "Ship the flinger fix", sketches: [join(workDir, "sketch.png")] },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "Ship the flinger fix", sketches: [join(workDir, "sketch.png")] },
     });
 
     expect(response.statusCode).toBe(200);
@@ -60,7 +66,7 @@ describe("buildApp pipeline run route", () => {
     if (argvOut === undefined) throw new Error("stub argv output path not configured");
     const recorded: unknown = JSON.parse(await readFile(argvOut, "utf8"));
     expect(recorded).toMatchObject({
-      argv: ["--repo", workDir, "--goal-file", expect.stringMatching(/goal\.txt$/), "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
+      argv: ["--request-id", "d17e801d-4fe0-4fe3-860b-23805fa78819", "--repo", workDir, "--goal-file", expect.stringMatching(/goal\.txt$/), "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
       goal: "Ship the flinger fix",
     });
   });
@@ -73,7 +79,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: `Use ${existing} and /definitely/missing.md as context` },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: `Use ${existing} and /definitely/missing.md as context` },
     });
 
     expect(response.statusCode).toBe(200);
@@ -93,7 +99,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: "Ship the flinger fix" },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "Ship the flinger fix" },
     });
 
     expect(response.statusCode).toBe(200);
@@ -107,7 +113,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: "relative/path", goal: "Ship it" },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: "relative/path", goal: "Ship it" },
     });
 
     expect(response.statusCode).toBe(400);
@@ -121,7 +127,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: "/definitely/not/a/repo", goal: "Ship it" },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: "/definitely/not/a/repo", goal: "Ship it" },
     });
 
     expect(response.statusCode).toBe(400);
@@ -134,7 +140,7 @@ describe("buildApp pipeline run route", () => {
     const response = await appTestContext.app.inject({
       method: "POST",
       url: "/api/pipeline-runs",
-      payload: { repoPath: workDir, goal: "   " },
+      payload: { requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "   " },
     });
 
     expect(response.statusCode).toBe(400);
@@ -146,7 +152,7 @@ describe("buildApp pipeline run route", () => {
     process.env["PI_WEB_PIPELINE_START_RUN"] = stubPath;
     try {
       const client = new ChildPipelineRunClient();
-      const result = await client.run({ repoPath: workDir, goal: "env override" });
+      const result = await client.run({ requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", repoPath: workDir, goal: "env override" });
       expect(result).toEqual({ ok: true, projectRunId: "run-123" });
     } finally {
       if (previous === undefined) delete process.env["PI_WEB_PIPELINE_START_RUN"];
@@ -239,18 +245,18 @@ describe("buildApp pipeline status/decision routes", () => {
 
   it("POST decision submits approve with the default actor", async () => {
     stubCommands();
-    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "approve" } });
+    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "approve", card: binding } });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({ ok: true, receipt: { accepted: true, decision: "approve" } });
     const argvOut = process.env["STUB_ARGV_OUT"];
     if (argvOut === undefined) throw new Error("stub argv output path not configured");
-    expect(JSON.parse(await readFile(argvOut, "utf8"))).toEqual(["--run", "run-42", "--decision", "approve", "--actor", "rbowen"]);
+    expect(JSON.parse(await readFile(argvOut, "utf8"))).toEqual(["--run", "run-42", "--decision", "approve", "--actor", "rbowen", "--card", JSON.stringify(binding)]);
   });
 
   it("POST decision maps no-open-card to a typed failure", async () => {
     process.env["STUB_MODE"] = "no-card";
     stubCommands();
-    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "revise", actor: "rbowen-delegated" } });
+    const response = await appTestContext.app.inject({ method: "POST", url: "/api/pipeline-runs/run-42/decision", payload: { decision: "revise", card: binding } });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: false, reason: "no-open-card", detail: "" });
   });
@@ -272,7 +278,7 @@ describe("buildApp pipeline status/decision routes", () => {
     try {
       const client = new ChildPipelineCommandClient();
       await expect(client.status("run-9")).resolves.toMatchObject({ ok: true, view: { runId: "run-9", phase: "AWAITING_SKETCH_APPROVAL" } });
-      await expect(client.decide("run-9", "approve", "rbowen")).resolves.toMatchObject({ ok: true, receipt: { accepted: true } });
+      await expect(client.decide("run-9", "approve", "rbowen", binding)).resolves.toMatchObject({ ok: true, receipt: { accepted: true } });
     } finally {
       if (previousStatus === undefined) delete process.env["PI_WEB_PIPELINE_STATUS"];
       else process.env["PI_WEB_PIPELINE_STATUS"] = previousStatus;
