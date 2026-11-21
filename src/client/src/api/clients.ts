@@ -4,6 +4,7 @@ import type { SessionDefaultsUpdate } from "../../../shared/apiTypes";
 import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
+import { serverPipelineRows } from "../cachedPipelineRuns";
 import {
   arrayOf,
   parseAborted,
@@ -238,11 +239,16 @@ export const workspacesApi = {
 };
 
 export const sessionsApi = {
-  sessions: (cwd: string, machineId = "local", options?: { signal?: AbortSignal }) => request(
-    `${machinePrefix(machineId)}/sessions?cwd=${encodeURIComponent(cwd)}`,
-    arrayOf(parseSessionInfo),
-    options?.signal === undefined ? undefined : { signal: options.signal },
-  ),
+  sessions: async (cwd: string, machineId = "local", options?: { signal?: AbortSignal }) => {
+    const init = options?.signal === undefined ? undefined : { signal: options.signal };
+    const listed = request(`${machinePrefix(machineId)}/sessions?cwd=${encodeURIComponent(cwd)}`, arrayOf(parseSessionInfo), init);
+    if (machineId !== "local") return listed;
+    const catalog = request("api/pipeline-chats?" + new URLSearchParams({ cwd }).toString(), data => serverPipelineRows(data, cwd), init)
+      .catch(() => []); // An older or offline web process can still serve the existing session list.
+    const [sessions, runs] = await Promise.all([listed, catalog]);
+    const ids = new Set(sessions.map(session => session.id));
+    return [...runs.filter(run => !ids.has(run.id)), ...sessions];
+  },
   unreadCatalog: (machineId = "local") => request(`${machinePrefix(machineId)}/sessions/unread`, parseSessionUnreadCatalogSnapshot, { cache: "no-store" }),
   acknowledgeUnread: (session: SessionRef, catalogId: string, throughCompletionOrder: number, machineId = "local") => {
     const body: SessionUnreadAcknowledgeRequest = { cwd: session.cwd, catalogId, throughCompletionOrder };

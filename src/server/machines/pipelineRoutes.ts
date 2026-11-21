@@ -5,6 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding } from "../../shared/pipelineApproval.js";
+import type { PipelineChatStore } from "../storage/pipelineChatStore.js";
 import type { FastifyInstance } from "fastify";
 
 /**
@@ -199,6 +200,7 @@ export function registerPipelineRoutes(
   app: FastifyInstance,
   runner: PipelineRunDelegate = new ChildPipelineRunClient(),
   commands: PipelineStatusDelegate & PipelineDecisionDelegate = new ChildPipelineCommandClient(),
+  history?: PipelineChatStore,
 ): void {
   app.post("/api/pipeline-runs", async (request, reply) => {
     const body = parseRunBody(request.body);
@@ -207,11 +209,42 @@ export function registerPipelineRoutes(
     if (invalid !== undefined) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: invalid });
     const sketches = [...(body.sketches ?? []), ...sketchesFromGoal(body.goal)];
     try {
-      return await reply.code(200).send(await runner.run({ ...body, sketches }));
+      const result = await runner.run({ ...body, sketches });
+      if (result.ok && history) {
+        try { history.register(result.projectRunId, body.requestId, body.repoPath, body.goal); }
+        catch (error) {
+          request.log.error({ err: error }, "Pipeline chat could not be registered");
+          return await reply.send({ ok: false, reason: "chat_save_pending", detail: "The run was accepted. Its chat is waiting to be saved. Resend the original goal to confirm this same submission." });
+        }
+      }
+      return await reply.code(200).send(result);
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
     }
   });
+
+  if (history) {
+    app.addHook("onClose", (_instance, done) => { history.close(); done(); });
+    app.get<{ Querystring: { cwd?: string } }>("/api/pipeline-chats", async (req, reply) => {
+      const cwd = req.query.cwd;
+      if (typeof cwd !== "string" || !isAbsolute(cwd)) return reply.code(400).send();
+      return reply.header("Cache-Control", "no-store").send(history.list(cwd));
+    });
+    app.get<{ Params: { runId: string }; Querystring: { after?: string } }>("/api/pipeline-runs/:runId/transcript", async (req, reply) => {
+      const { runId } = req.params;
+      const after = Number(req.query.after ?? "0");
+      if (!RUN_ID_RE.test(runId) || !Number.isSafeInteger(after) || after < 0) return reply.code(400).send();
+      if (!history.has(runId)) return reply.code(404).send();
+      return reply.header("Cache-Control", "no-store").send(history.page(runId, after));
+    });
+    app.post<{ Params: { runId: string } }>("/api/pipeline-runs/:runId/transcript", { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) => {
+      const { runId } = req.params;
+      if (!RUN_ID_RE.test(runId)) return reply.code(400).send();
+      if (!history.has(runId)) return reply.code(404).send();
+      if (!isRecord(req.body) || !history.save(runId, req.body["lines"])) return reply.code(400).send();
+      return reply.send({ ok: true });
+    });
+  }
 
   app.get<{ Params: { runId: string }; Querystring: { execution?: string } }>("/api/pipeline-runs/:runId/status", async (request, reply) => {
     const { runId } = request.params;

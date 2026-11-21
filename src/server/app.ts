@@ -41,6 +41,7 @@ import { MachineService } from "./machines/machineService.js";
 import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerSupervisorRoutes } from "./machines/supervisorRoutes.js";
 import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
+import { PipelineChatStore } from "./storage/pipelineChatStore.js";
 import { registerPipelineRoutes } from "./machines/pipelineRoutes.js";
 import type { PipelineDecisionDelegate, PipelineRunDelegate, PipelineStatusDelegate } from "./machines/pipelineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
@@ -60,6 +61,7 @@ export interface AppDependencies {
   pipelineRunner?: PipelineRunDelegate;
   /** Pipeline status/decision CLI target; tests inject a stubbed CLI client. */
   pipelineCommands?: PipelineStatusDelegate & PipelineDecisionDelegate;
+  pipelineChatStore?: PipelineChatStore;
   sessionDaemon?: SessionProxyDaemon;
   agentProfileProvider?: ActiveAgentProfileProvider;
   piWebPlugins?: Pick<PiWebPluginService, "manifest" | "plugins" | "readAsset">;
@@ -296,7 +298,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   registerMachineRoutes(app, machines);
   registerMachinePluginProxyRoutes(app, machines);
   registerSupervisorRoutes(app, deps.unitSupervisor);
-  registerPipelineRoutes(app, deps.pipelineRunner, deps.pipelineCommands);
+  registerPipelineRoutes(app, deps.pipelineRunner, deps.pipelineCommands, deps.pipelineChatStore ?? new PipelineChatStore());
 
   registerLocalProjectRoutes(app, projects, workspaces, "/api", { config: configService, sessionDaemon });
   registerLocalProjectRoutes(app, projects, workspaces, "/api/machines/local", { config: configService, sessionDaemon });

@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatLine } from "../components/shared";
 import { initialAppState } from "../appState";
 import { createMemoryStorage } from "../cachedNewSessions";
 import { setPipelineRunStorageOverrideForTests } from "../cachedPipelineRuns";
@@ -64,6 +65,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     const api: typeof defaultApi = {
       ...defaultApi,
       prompt: (session) => { promptCalls.push(session.id); return Promise.resolve({ accepted: true }); },
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: openView }),
       pipelineRun: (repoPath, goal) => {
         pipelineRunCalls += 1;
         expect(repoPath).toBe("/repo");
@@ -92,6 +94,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
   it("keeps the launched chat when the user tabs away and back to the row", async () => {
     const api: typeof defaultApi = {
       ...defaultApi,
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: openView }),
       pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
     };
     const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] });
@@ -347,6 +350,94 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     }
   });
 
+  it("reopens the saved conversation while status is offline and keeps each question and edit once", async () => {
+    const activity = { id: "pair/entry/0", role: "worker", timestamp: "2026-11-20T12:34:56Z", summary: "Editing src/main.ts" };
+    let module = false;
+    const api: typeof defaultApi = { ...defaultApi, sessions: () => Promise.resolve([]),
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-history", executionRunId: execution }),
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: { ...openView, agentActivity: [activity],
+        card: module ? { ...openView.card, stage: "modules", revision: 2, questionId: "module-split", artifact: "Two modules" } : openView.card } }),
+    };
+    const state = () => ({ ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] });
+    const first = makeController(api, state(), { pipelinePollMs: 8 });
+    const second = makeController({ ...api, pipelineRunStatus: () => Promise.reject(new Error("status offline")) }, state());
+    try {
+      await first.controller.startSession({ pipeline: true });
+      await first.controller.send("Build the parser");
+      await vi.waitFor(() => { expect(first.state.messages.some(row => row.parts[0]?.type === "pipelineCard")).toBe(true); });
+      await first.controller.send("status");
+      module = true;
+      await vi.waitFor(() => { expect(first.state.messages.filter(row => row.parts[0]?.type === "pipelineCard")).toHaveLength(2); });
+      const saved = first.state.messages.map(row => [row.pipelineId, row.meta?.timestamp]);
+      expect(saved.every(([id, time]) => typeof id === "string" && typeof time === "string")).toBe(true);
+      expect(saved.filter(([id]) => id === "activity:" + activity.id)).toEqual([["activity:" + activity.id, activity.timestamp]]);
+      first.controller.dispose();
+      await second.controller.refreshCurrentWorkspaceSessions();
+      const restored = second.state.sessions.find(row => row.id === "run-history");
+      if (!restored) throw new Error("saved run missing");
+      await second.controller.selectSession(restored);
+      await second.controller.selectSession(oldSession);
+      await second.controller.selectSession(restored);
+      expect(second.state.messages.map(row => [row.pipelineId, row.meta?.timestamp])).toEqual(saved);
+      const cards = second.state.messages.flatMap(row => row.parts).filter(part => part.type === "pipelineCard");
+      expect(cards.map(part => part.card?.artifact)).toEqual(["hello world", "Two modules"]);
+      expect(cards.every(part => part.card?.historical === true)).toBe(true);
+    } finally { first.controller.dispose(); second.controller.dispose(); }
+  });
+
+  it("restores server messages when the browser chat cache is empty and status cannot respond", async () => {
+    const { serverPipelineRows } = await import("../cachedPipelineRuns");
+    const run = "run-reopen", timestamp = "2026-11-20T16:00:00Z";
+    const saved = { role: "system" as const, pipelineId: "event-7", pipelineOrder: 7, meta: { timestamp }, parts: [{ type: "text" as const, text: "Worker finished writing src/main.ts" }] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve(serverPipelineRows([{ runId: run, requestId: "request-1", cwd: workspace.path, goal: "Write the app", created: timestamp }], workspace.path)),
+      pipelineRunStatus: () => new Promise(() => { /* simulate a status request that never completes */ }),
+    };
+    const loaded: string[] = [];
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, {
+      pipelineHistory: { load: id => { loaded.push(id); return Promise.resolve([saved]); }, save: () => Promise.resolve() },
+    });
+    try {
+      await harness.controller.refreshCurrentWorkspaceSessions();
+      const row = harness.state.sessions.find(candidate => candidate.id === run);
+      if (!row) throw new Error("persisted chat missing from catalog");
+      await harness.controller.selectSession(row);
+      await vi.waitFor(() => { expect(harness.state.messages.some(line => line.pipelineId === saved.pipelineId && line.meta?.timestamp === timestamp)).toBe(true); });
+      expect(loaded).toEqual([run]);
+    } finally { harness.controller.dispose(); }
+  });
+
+  it("preserves the saved card timestamp when live status arrives before its history page", async () => {
+    const { serverPipelineRows } = await import("../cachedPipelineRuns");
+    const run = "run-card-time", timestamp = "2026-11-19T14:33:22Z";
+    let finish: (rows: ChatLine[]) => void = () => { throw new Error("history was not requested"); };
+    const history = new Promise<ChatLine[]>(resolve => { finish = resolve; });
+    const api: typeof defaultApi = { ...defaultApi,
+      sessions: () => Promise.resolve(serverPipelineRows([{ runId: run, cwd: workspace.path, goal: "Write the app", created: timestamp }], workspace.path)),
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: openView }),
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, {
+      pipelineHistory: { load: () => history, save: () => Promise.resolve() },
+    });
+    try {
+      await harness.controller.refreshCurrentWorkspaceSessions();
+      const session = harness.state.sessions.find(candidate => candidate.id === run);
+      if (!session) throw new Error("saved chat missing");
+      await harness.controller.selectSession(session);
+      await vi.waitFor(() => { expect(harness.state.messages.some(row => row.parts[0]?.type === "pipelineCard")).toBe(true); });
+      const shown = harness.state.messages.find(row => row.parts[0]?.type === "pipelineCard");
+      if (!shown) throw new Error("live card missing");
+      finish([{ ...shown, meta: { timestamp }, pipelineOrder: Date.parse(timestamp) * 1000, pipelineVersion: 1 }]);
+      await vi.waitFor(() => {
+        const cards = harness.state.messages.filter(row => row.parts[0]?.type === "pipelineCard");
+        expect(cards).toHaveLength(1);
+        expect(cards[0]?.meta?.timestamp).toBe(timestamp);
+        expect(cards[0]?.parts[0]).toMatchObject({ card: { binding }, stale: false });
+      });
+    } finally { harness.controller.dispose(); }
+  });
+
   it("renders the live decision card from the status poll and approves from the card, not typed text", async () => {
     const decisions: [string, string][] = [];
     const api: typeof defaultApi = {
@@ -424,7 +515,9 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       if (!row) throw new Error("saved pipeline row not restored");
       await second.controller.selectSession(row);
       await flush();
-      expect(second.state.messages.flatMap((line) => line.parts).find((part) => part.type === "pipelineCard"))
+      const cards = second.state.messages.flatMap(line => line.parts).filter(part => part.type === "pipelineCard");
+      expect(cards[0]).toMatchObject({ card: { binding, historical: true } });
+      expect(cards.find(part => part.phase === "CLOSED"))
         .toMatchObject({ delivery: { diff: "+hello" }, retry: { decision: "approve", binding } });
       await second.controller.submitPipelineDecision("approve", "run-approval", binding);
       expect(seen).toEqual([["run-approval", "approve", binding], ["run-approval", "approve", binding]]);

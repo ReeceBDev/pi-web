@@ -62,7 +62,7 @@ export class PipelineCard extends LitElement {
   private renderBody(): TemplateResult {
     const card = this.card;
     if (card === undefined) return this.closeStatus !== undefined || this.detail !== undefined ? html`` : html`<p class="idle">Waiting for the next pipeline action</p>`;
-    const disabled = card.decided === true || card.decisionPending === true || this.submitting !== undefined || this.stale ||
+    const disabled = card.historical === true || card.decided === true || card.decisionPending === true || this.submitting !== undefined || this.stale ||
       this.retry !== undefined || card.artifact === undefined || card.binding === undefined;
     return html`
       <div class="question">
@@ -72,8 +72,8 @@ export class PipelineCard extends LitElement {
       ${card.artifact === undefined
         ? html`<p class="artifact-missing">artifact ${card.artifactSha256.slice(0, 12)}… (content unavailable)</p>`
         : html`<details class="artifact"><summary>artifact</summary><pre>${card.artifact}</pre></details>`}
-      ${card.decided === true
-        ? html`<p class="decided" role="status">Decided · recorded</p>`
+      ${card.decided === true || card.historical === true
+        ? html`<p class="decided" role="status">${card.decided === true ? "Decided · recorded" : "Previous request"}</p>`
         : html`
           <div class="actions">
             <button class="decide-approve" ?disabled=${disabled} @click=${() => void this.decide("approve", card.binding)}>Approve</button>
@@ -86,7 +86,7 @@ export class PipelineCard extends LitElement {
   }
 
   private async decide(decision: "approve" | "revise", binding?: PipelineApprovalBinding): Promise<void> {
-    if (this.submitting !== undefined || !binding) return;
+    if (this.submitting !== undefined || this.card?.historical === true || !binding) return;
     this.submitting = decision;
     try {
       await this.onDecide?.(decision, this.runId, binding);

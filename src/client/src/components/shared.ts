@@ -74,6 +74,7 @@ export interface PipelineDecisionCard {
   stage?: string;
   artifact?: string;
   decided?: boolean;
+  historical?: boolean;
   decisionPending?: boolean;
 }
 
@@ -96,6 +97,10 @@ export type ChatPart =
   | { type: "empty" };
 
 export interface ChatLine {
+  /** Browser-owned pipeline entry, independent of Pi tree navigation. */
+  pipelineId?: string;
+  pipelineOrder?: number;
+  pipelineVersion?: number;
   /** Durable session-tree entry; absent for optimistic or in-flight messages. */
   entryId?: string;
   role: "user" | "assistant" | "tool" | "system" | "bash" | "skill";
