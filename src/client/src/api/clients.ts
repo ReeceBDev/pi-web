@@ -1,4 +1,4 @@
-import type { PipelineApprovalBinding } from "../../../shared/pipelineApproval";
+import type { PipelineApprovalBinding, PipelineRevisionFeedback } from "../../../shared/pipelineApproval";
 import { parseSessionDefaults } from "../../../shared/sessionDefaults";
 import type { SessionDefaultsUpdate } from "../../../shared/apiTypes";
 import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
@@ -410,7 +410,7 @@ export const pipelineApi = {
     return request(`api/pipeline-runs/${encodeURIComponent(runId)}/status${query}`, parsePipelineRunStatus, { signal: AbortSignal.timeout(12_000) });
   },
   /** Submit a sketch-card decision (approve/revise) to a pipeline run. */
-  pipelineRunDecision: (runId: string, decision: "approve" | "revise", card: PipelineApprovalBinding) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision, card }), signal: AbortSignal.timeout(12_000) }),
+  pipelineRunDecision: (runId: string, decision: "approve" | "revise", card: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision, card, ...(feedback ? { feedback } : {}) }), signal: AbortSignal.timeout(12_000) }),
 } as const;
 
 export const api = {

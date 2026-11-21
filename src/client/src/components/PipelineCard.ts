@@ -1,10 +1,10 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { PipelineApprovalBinding } from "../../../shared/pipelineApproval";
+import type { PipelineApprovalBinding, PipelineRevisionFeedback } from "../../../shared/pipelineApproval";
 import type { PendingPipelineDecision } from "../cachedPipelineRuns";
 import type { PipelineDecisionCard, PipelineDeliveryView } from "./shared";
 
-export type PipelineDecideCallback = (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding) => void | Promise<void>;
+export type PipelineDecideCallback = (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback) => void | Promise<void>;
 
 /**
  * The pipeline run's live decision card in the run's chat: current phase, the
@@ -27,8 +27,17 @@ export class PipelineCard extends LitElement {
   @state() private submitting: "approve" | "revise" | undefined;
   @state() private error = "";
 
+  @state() private editingRevision = false;
+  @state() private reason = "";
+  @state() private acceptanceRef = "";
+
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (changed.has("card")) this.error = "";
+    if (changed.has("card") && JSON.stringify(changed.get("card")?.binding) !== JSON.stringify(this.card?.binding)) {
+      this.error = "";
+      this.editingRevision = false;
+      this.reason = "";
+      this.acceptanceRef = "";
+    }
   }
 
   override render(): TemplateResult {
@@ -56,7 +65,7 @@ export class PipelineCard extends LitElement {
 
   private renderRetry(pending: PendingPipelineDecision): TemplateResult {
     return html`<button ?disabled=${this.submitting !== undefined}
-      @click=${() => void this.decide(pending.decision, pending.binding)}>Retry decision confirmation</button>`;
+      @click=${() => void this.decide(pending.decision, pending.binding, pending.feedback)}>Retry decision confirmation</button>`;
   }
 
   private renderBody(): TemplateResult {
@@ -75,9 +84,16 @@ export class PipelineCard extends LitElement {
       ${card.decided === true || card.historical === true
         ? html`<p class="decided" role="status">${card.decided === true ? "Decided · recorded" : "Previous request"}</p>`
         : html`
+          ${this.editingRevision ? html`<label>What needs to change?
+            <textarea required maxlength="4000" .value=${this.reason} @input=${(e: Event) => { if (e.currentTarget instanceof HTMLTextAreaElement) this.reason = e.currentTarget.value; }}></textarea></label>
+            ${card.stage === "modules" ? html`<label>Affected requirement, demo or interface ID (optional)
+              <input maxlength="240" .value=${this.acceptanceRef} @input=${(e: Event) => { if (e.currentTarget instanceof HTMLInputElement) this.acceptanceRef = e.currentTarget.value; }}></label>` : null}` : null}
           <div class="actions">
             <button class="decide-approve" ?disabled=${disabled} @click=${() => void this.decide("approve", card.binding)}>Approve</button>
-            <button class="decide-revise" ?disabled=${disabled} @click=${() => void this.decide("revise", card.binding)}>Revise</button>
+            <button class="decide-revise" ?disabled=${disabled || (this.editingRevision && !this.reason.trim())}
+              @click=${() => { if (!this.editingRevision) { this.editingRevision = true; return; }
+                void this.decide("revise", card.binding, { reason: this.reason.trim(), ...(this.acceptanceRef.trim() ? { acceptanceRef: this.acceptanceRef.trim() } : {}) }); }}>
+              ${this.editingRevision ? "Send revision" : "Revise"}</button>
             ${card.decisionPending === true || this.submitting !== undefined ? html`<span class="pending" role="status">Recording decision…</span>` : null}
           </div>
         `}
@@ -85,11 +101,12 @@ export class PipelineCard extends LitElement {
     `;
   }
 
-  private async decide(decision: "approve" | "revise", binding?: PipelineApprovalBinding): Promise<void> {
+  private async decide(decision: "approve" | "revise", binding?: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<void> {
     if (this.submitting !== undefined || this.card?.historical === true || !binding) return;
     this.submitting = decision;
     try {
-      await this.onDecide?.(decision, this.runId, binding);
+      if (feedback) await this.onDecide?.(decision, this.runId, binding, feedback);
+      else await this.onDecide?.(decision, this.runId, binding);
     } catch {
       this.error = "Decision failed · press the button again";
     } finally {
@@ -110,6 +127,8 @@ export class PipelineCard extends LitElement {
     .artifact summary { cursor: pointer; color: var(--pi-muted); }
     .artifact pre { margin: 6px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--pi-bg); border: 1px solid var(--pi-border-muted); border-radius: 6px; padding: 8px; font-size: 12px; }
     .artifact-missing { margin: 0; color: var(--pi-muted); font-size: 12px; }
+    label { display: grid; gap: 4px; }
+    textarea, input { font: inherit; color: inherit; background: var(--pi-bg); border: 1px solid var(--pi-border); padding: 6px; }
     .actions { display: flex; gap: 8px; align-items: center; }
     .actions button { font: inherit; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--pi-border); background: var(--pi-bg); color: var(--pi-text); cursor: pointer; }
     .actions button:hover:not(:disabled) { background: var(--pi-surface-hover); }

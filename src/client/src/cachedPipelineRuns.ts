@@ -1,4 +1,4 @@
-import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding } from "../../shared/pipelineApproval";
+import { isPipelineExecutionId, readPipelineApproval, readPipelineFeedback, type PipelineRevisionFeedback, type PipelineApprovalBinding } from "../../shared/pipelineApproval";
 import type { ChatLine, ChatPart } from "./components/shared";
 import type { SessionInfo } from "./api";
 import { createMemoryStorage } from "./cachedNewSessions";
@@ -12,6 +12,7 @@ const defaultMachineId = "local";
 export interface PendingPipelineDecision {
   binding: PipelineApprovalBinding;
   decision: "approve" | "revise";
+  feedback?: PipelineRevisionFeedback;
 }
 
 export interface CachedPipelineRunInfo {
@@ -178,7 +179,10 @@ function parsePipelineRun(value: unknown): CachedPipelineRunInfo[] {
   const stored = value["pendingDecision"];
   const binding = isRecord(stored) ? readPipelineApproval(stored["binding"]) : undefined;
   const decision = isRecord(stored) ? stored["decision"] : undefined;
-  const pendingDecision: PendingPipelineDecision | undefined = binding && (decision === "approve" || decision === "revise") ? { binding, decision } : undefined;
+  const rawFeedback = isRecord(stored) ? stored["feedback"] : undefined;
+  const feedback = readPipelineFeedback(rawFeedback);
+  const pendingDecision: PendingPipelineDecision | undefined = binding && (decision === "approve" || decision === "revise") &&
+    (rawFeedback === undefined || (decision === "revise" && feedback)) ? { binding, decision, ...(feedback ? { feedback } : {}) } : undefined;
   if (submissionPending && (typeof requestId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestId))) return [];
   if (typeof runId !== "string" || runId === "" || typeof cwd !== "string" || typeof goal !== "string" || typeof created !== "string") return [];
   return [{ runId, cwd, goal, created, machineId: typeof machineId === "string" ? machineId : defaultMachineId, ...(typeof requestId === "string" ? { requestId } : {}), ...(submissionPending ? { submissionPending: true } : {}), ...(isPipelineExecutionId(execution) ? { executionRunId: execution } : {}), ...(pendingDecision ? { pendingDecision } : {}) }];

@@ -77,6 +77,13 @@ it("requires the reviewed card, pins status, and forwards the exact decision to 
     expect(status.json()).toEqual({ ok: true, view: { ok: true, phase: "CLOSED", finalPhase: "BUILD", status: "blocked", executionRunId: execution } });
     const submit = await app.inject({ method: "POST", url: "/api/pipeline-runs/run-1/decision", payload: { decision: "approve", actor: "ignored", card } });
     expect(submit.json()).toEqual({ ok: true, receipt: { accepted: true } });
+    const feedback = { reason: "The fourth example must remain valid.", acceptanceRef: "goal-5" };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const revise = await app.inject({ method: "POST", url: "/api/pipeline-runs/run-1/decision", payload: { decision: "revise", card, feedback } });
+      expect(revise.json()).toEqual({ ok: true, receipt: { accepted: true } });
+    }
+    expect(calls[2]).toEqual(calls[3]);
+    expect(calls[2]?.slice(-2)).toEqual(["--feedback", JSON.stringify(feedback)]);
     expect(calls[0]).toEqual(["/offline/status.js", "--run", "run-1", "--execution", execution]);
     expect(calls[1]).toEqual(["/offline/decide.js", "--run", "run-1", "--decision", "approve", "--actor", "rbowen", "--card", JSON.stringify(card)]);
   } finally {

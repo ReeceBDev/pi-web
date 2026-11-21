@@ -58,6 +58,29 @@ describe("pipeline-card", () => {
     expect(onDecide).toHaveBeenCalledWith("approve", "run-1", binding);
   });
 
+  it("keeps a revision draft across status refreshes and submits the reviewed binding", async () => {
+    const onDecide = vi.fn();
+    const moduleBinding = { ...binding, stage: "modules" as const };
+    const card = { questionId: "module-review", artifactSha256: binding.artifactSha256, binding: moduleBinding, artifact: "plan", stage: "modules" as const, revision: 1 };
+    const element = await mount(card, onDecide);
+    const root = rootOf(element);
+    button(root, ".decide-revise").click();
+    await element.updateComplete;
+    const reason = root.querySelector("textarea");
+    if (!(reason instanceof HTMLTextAreaElement)) throw new Error("revision reason field missing");
+    reason.value = "Preserve the fourth approved example.";
+    reason.dispatchEvent(new Event("input"));
+    const reference = root.querySelector("input");
+    if (!(reference instanceof HTMLInputElement)) throw new Error("revision reference field missing");
+    reference.value = "goal-5";
+    reference.dispatchEvent(new Event("input"));
+    element.card = { ...card };
+    await element.updateComplete;
+    button(root, ".decide-revise").click();
+    await element.updateComplete;
+    expect(onDecide).toHaveBeenCalledWith("revise", "run-1", moduleBinding, { reason: reason.value, acceptanceRef: "goal-5" });
+  });
+
   it("disables the buttons once the question is decided", async () => {
     const element = await mount({ questionId: "sketch-approval", artifactSha256: "664ef460", revision: 1, decided: true });
     const root = rootOf(element);

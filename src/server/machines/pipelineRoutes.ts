@@ -4,7 +4,7 @@ import { existsSync, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding } from "../../shared/pipelineApproval.js";
+import { isPipelineExecutionId, readPipelineApproval, readPipelineFeedback, type PipelineRevisionFeedback, type PipelineApprovalBinding } from "../../shared/pipelineApproval.js";
 import type { PipelineChatStore } from "../storage/pipelineChatStore.js";
 import type { FastifyInstance } from "fastify";
 
@@ -21,9 +21,11 @@ import type { FastifyInstance } from "fastify";
  * {ok:false, reason, detail} (exit nonzero).
  */
 
-export const DEFAULT_PIPELINE_START_RUN_SCRIPT = join(process.env["PI_PROJECT_DIR"] || join(homedir(), "pi"), "pipeline", "dist", "scripts", "start-run.js");
-export const DEFAULT_PIPELINE_STATUS_SCRIPT = join(process.env["PI_PROJECT_DIR"] || join(homedir(), "pi"), "pipeline", "dist", "scripts", "run-status.js");
-export const DEFAULT_PIPELINE_DECIDE_SCRIPT = join(process.env["PI_PROJECT_DIR"] || join(homedir(), "pi"), "pipeline", "dist", "scripts", "approve-run.js");
+const projectDir = process.env["PI_PROJECT_DIR"];
+const scriptsDir = join(projectDir === undefined || projectDir === "" ? join(homedir(), "pi") : projectDir, "pipeline", "dist", "scripts");
+export const DEFAULT_PIPELINE_START_RUN_SCRIPT = join(scriptsDir, "start-run.js");
+export const DEFAULT_PIPELINE_STATUS_SCRIPT = join(scriptsDir, "run-status.js");
+export const DEFAULT_PIPELINE_DECIDE_SCRIPT = join(scriptsDir, "approve-run.js");
 const PIPELINE_ACTOR = "rbowen";
 const RUN_ID_RE = /^[A-Za-z0-9._:-]+$/;
 
@@ -48,7 +50,7 @@ export interface PipelineStatusDelegate {
 }
 
 export interface PipelineDecisionDelegate {
-  decide(runId: string, decision: "approve" | "revise", actor: string, card: PipelineApprovalBinding): Promise<PipelineDecisionResult>;
+  decide(runId: string, decision: "approve" | "revise", actor: string, card: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<PipelineDecisionResult>;
 }
 
 /** Spawn delegate for the pipeline status/decision CLIs. Same trust domain as
@@ -78,8 +80,8 @@ export class ChildPipelineCommandClient implements PipelineStatusDelegate, Pipel
       return { ok: true as const, view };
     });
   }
-  async decide(runId: string, decision: "approve" | "revise", actor: string, card: PipelineApprovalBinding): Promise<PipelineDecisionResult> {
-    const receipt = parsedReceiptIsObject(await this.collectCli(this.spawnCli(this.decideScript, ["--run", runId, "--decision", decision, "--actor", actor, "--card", JSON.stringify(card)])));
+  async decide(runId: string, decision: "approve" | "revise", actor: string, card: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<PipelineDecisionResult> {
+    const receipt = parsedReceiptIsObject(await this.collectCli(this.spawnCli(this.decideScript, ["--run", runId, "--decision", decision, "--actor", actor, "--card", JSON.stringify(card), ...(feedback ? ["--feedback", JSON.stringify(feedback)] : [])])));
     return this.toResult(receipt.collected, () => (receipt.value === undefined ? undefined : { ok: true as const, receipt: receipt.value }));
   }
 
@@ -269,7 +271,10 @@ export function registerPipelineRoutes(
     const card = readPipelineApproval(body["card"]);
     if (!card) return reply.code(400).send({ ok: false, reason: "review_required", detail: "submit the identity of the card you reviewed" });
     try {
-      return await reply.code(200).send(await commands.decide(runId, decision, PIPELINE_ACTOR, card));
+      const feedback = readPipelineFeedback(body["feedback"]);
+      if (body["feedback"] !== undefined && (decision !== "revise" || !feedback)) return await reply.code(400).send({ ok: false, reason: "invalid-feedback", detail: "Enter a revision reason and an optional affected requirement." });
+      const result = feedback ? await commands.decide(runId, decision, PIPELINE_ACTOR, card, feedback) : await commands.decide(runId, decision, PIPELINE_ACTOR, card);
+      return await reply.code(200).send(result);
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
     }

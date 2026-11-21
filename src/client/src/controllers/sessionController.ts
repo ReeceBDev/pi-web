@@ -2,7 +2,7 @@ import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, t
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorScope, type SessionBrowserErrorOwner } from "../browserErrors";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
-import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding } from "../../../shared/pipelineApproval";
+import { isPipelineExecutionId, readPipelineApproval, type PipelineApprovalBinding, type PipelineRevisionFeedback } from "../../../shared/pipelineApproval";
 import { serverPipelineHistory, type PipelineChatHistory } from "../pipelineChatHistory";
 import { loadPipelineLines, savePipelineLine, savePipelineDecision, savePipelineExecution, type PendingPipelineDecision, forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun, rememberPipelineSubmission } from "../cachedPipelineRuns";
 import { textMessage } from "../chatMessages";
@@ -826,11 +826,14 @@ export class SessionController {
       line = textMessage("system", view ? "Pipeline status · " + runId + " · " + pipelineStatusSummary(view) : "Waiting for pipeline status");
     } else {
       const part = pending.pipelineCard?.parts[0];
-      if (part?.type === "pipelineCard" && part.card?.binding && part.card.artifact !== undefined) {
+      if (part?.type !== "pipelineCard" || !part.card?.binding || part.card.artifact === undefined) {
+        line = textMessage("system", "Open and review the current decision card before deciding.");
+      } else if (command === "revise") {
+        line = textMessage("system", "Open the decision card and enter the correction you want the next worker to make.");
+      } else {
         await this.submitPipelineDecision(command, runId, part.card.binding);
         return;
       }
-      line = textMessage("system", "Open and review the current decision card before deciding.");
     }
     this.appendPipelineLines(pending, [line]);
   }
@@ -949,7 +952,7 @@ export class SessionController {
   /** Approve/revise the open card from its buttons (the card UI, not typed
    * commands). Receipt renders as a note; the decided question's buttons stay
    * disabled until a new revision (or question) opens. */
-  async submitPipelineDecision(decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding): Promise<void> {
+  async submitPipelineDecision(decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<void> {
     const session = this.getState().selectedSession;
     const pending = session === undefined ? undefined : this.pendingSessionStarts.get(session.id);
     if (pending?.pipelineRunId !== runId || pending.discarded || pending.pipelineDecideInFlight !== undefined) return;
@@ -960,7 +963,7 @@ export class SessionController {
     const retrying = unconfirmed?.decision === decision && JSON.stringify(unconfirmed.binding) === key;
     const current = card?.artifact !== undefined && JSON.stringify(card.binding) === key && pending.pipelineStale !== true;
     if (unconfirmed ? !retrying : !current || (pending.pipelineDecidedKeys ?? []).includes(key)) return;
-    const submission = { binding, decision };
+    const submission = unconfirmed ?? { binding, decision, ...(feedback ? { feedback } : {}) };
     if (!savePipelineDecision(runId, pending.machineId, submission)) {
       this.appendPipelineLines(pending, [textMessage("system", "Could not save the approval identity for a safe retry.")]);
       return;
@@ -970,8 +973,9 @@ export class SessionController {
     const view = pending.pipelineLastView;
     if (view) this.updatePipelineCardLine(pending, runId, view);
     try {
-      const result = await this.api.pipelineRunDecision(runId, decision, binding);
-      if (result.ok || result.reason === "stale-card") {
+      const result = submission.feedback ? await this.api.pipelineRunDecision(runId, decision, binding, submission.feedback)
+        : await this.api.pipelineRunDecision(runId, decision, binding);
+      if (result.ok || (result.reason === "stale-card" || result.reason === "invalid-feedback")) {
         savePipelineDecision(runId, pending.machineId, undefined);
         delete pending.pipelineUnconfirmedDecision;
       }

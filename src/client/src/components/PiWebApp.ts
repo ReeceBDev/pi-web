@@ -3354,7 +3354,7 @@ export class PiWebApp extends LitElement {
 
   private readonly handleSubmitAsk = (askId: string, submission: AskUserSubmission): Promise<void> => this.sessions.submitAsk(askId, submission);
 
-  private readonly handlePipelineDecide: import("./PipelineCard").PipelineDecideCallback = (decision, runId, binding) => this.sessions.submitPipelineDecision(decision, runId, binding);
+  private readonly handlePipelineDecide: import("./PipelineCard").PipelineDecideCallback = (decision, runId, binding, feedback) => this.sessions.submitPipelineDecision(decision, runId, binding, feedback);
 
   private readonly handleAnswerDialog = (dialogId: string, value: ExtensionDialogAnswer): Promise<void> => this.sessions.answerDialog(dialogId, value);
 

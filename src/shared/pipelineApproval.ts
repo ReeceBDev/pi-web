@@ -1,3 +1,12 @@
+export interface PipelineRevisionFeedback { reason: string; acceptanceRef?: string }
+
+export function readPipelineFeedback(value: unknown): PipelineRevisionFeedback | undefined {
+  if (typeof value !== "object" || !value || !("reason" in value) || typeof value.reason !== "string" ||
+      !value.reason.trim() || value.reason.length > 4000) return undefined;
+  if ("acceptanceRef" in value && (typeof value.acceptanceRef !== "string" || !value.acceptanceRef.trim() || value.acceptanceRef.length > 240)) return undefined;
+  return { reason: value.reason, ...("acceptanceRef" in value && typeof value.acceptanceRef === "string" ? { acceptanceRef: value.acceptanceRef } : {}) };
+}
+
 export interface PipelineApprovalBinding {
   rootExecutionId: string;
   targetExecutionId: string;

@@ -8,6 +8,7 @@ import { registerProjectMutationRoutes } from "./sessiond/projectMutationRoutes.
 import { afterEach, beforeEach } from "vitest";
 import { buildApp } from "./app.js";
 import { ProjectService } from "./projects/projectService.js";
+import { PipelineChatStore } from "./storage/pipelineChatStore.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import type { MachineClient } from "./machines/machineClient.js";
 import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
@@ -124,7 +125,9 @@ export function registerAppTestHooks(): void {
     const projects = new ProjectService(new ProjectStore(join(tempDir, "projects.json")));
     const sessionDaemon = fakeSessionDaemon(projects);
     workspaceCatalog = new AppTestWorkspaceCatalog(projects);
+    const pipelineChatStore = new PipelineChatStore(join(tempDir, "pipeline-history.sqlite"));
     app = await buildApp({
+      pipelineChatStore,
       projects,
       workspaceCatalog,
       unitSupervisor: delegatingUnitSupervisor(),
@@ -173,6 +176,7 @@ export function registerAppTestHooks(): void {
       clientDist: false,
       logger: false,
     });
+    app.addHook("onClose", (_app, done) => { pipelineChatStore.close(); done(); });
     app.addHook("onClose", () => sessionDaemon.close());
   });
 
