@@ -1003,6 +1003,49 @@ function createDefaultRuntimeFactory(
     // resources skip resolution entirely and are trusted, as before.
     const eventBus = createEventBus();
     const builtinFactories = await getBuiltinExtensionFactories();
+    // Host bridge: when this factory carries the daemon's spawn capability, expose it to
+    // session extensions on the session's shared event bus (channel contract with the
+    // context-relay extension's successor spawn). A relay successor started through here
+    // becomes a hosted, interactive session — one writer on its file — instead of the
+    // detached one-shot process that forked session trees (2026-11-21 incident).
+    const extensionFactories = spawn === undefined
+        ? builtinFactories
+        : [
+            ...builtinFactories,
+            {
+                name: "web-host-spawn",
+                builtin: true,
+                replaceable: false,
+                factory: (
+                    pi: { events: { emit(channel: string, data: unknown): void; on(channel: string, handler: (data: unknown) => void): () => void } },
+                ) => {
+                    // Probe: the context-relay extension emits this with a respond callback to
+                    // learn whether a host bridge is present. Answer synchronously (emit is
+                    // synchronous; handlers run to completion during the emit call).
+                    pi.events.on("pi-web:host:probe", (data: unknown) => {
+                        if (!isRecord(data)) return;
+                        const respond = data["respond"];
+                        if (isHostRespondFn(respond)) respond({ ok: true, host: "pi-web" });
+                    });
+                    pi.events.on("pi-web:host:startSession", (data: unknown) => {
+                        if (!isRecord(data)) return;
+                        const respond = data["respond"];
+                        if (!isHostRespondFn(respond)) return;
+                        const targetCwd = typeof data["cwd"] === "string" ? data["cwd"] : undefined;
+                        const prompt = typeof data["prompt"] === "string" ? data["prompt"] : "";
+                        const spec = {
+                            spawningCwd: cwd,
+                            spawningSessionId: sessionManager.getSessionId(),
+                            cwd: targetCwd,
+                            prompt,
+                        };
+                        spawn(spec)
+                            .then((result) => { respond({ ok: true, sessionId: result.sessionId, cwd: result.cwd }); })
+                            .catch((error: unknown) => { respond({ ok: false, error: String(error instanceof Error ? error.message : error) }); });
+                    });
+                },
+            },
+        ];
     const projectTrustRequiring = hasTrustRequiringProjectResources(cwd);
     const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: !projectTrustRequiring });
     // Pre-session-creation trust failures (`project_trust` handler errors)
@@ -1014,7 +1057,7 @@ function createDefaultRuntimeFactory(
       agentDir,
       modelRuntime,
       settingsManager,
-      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus, extensionFactories: builtinFactories },
+      resourceLoaderOptions: { ...resourceLoaderOptions, eventBus, extensionFactories },
       ...(projectTrustRequiring
         ? {
             resourceLoaderReloadOptions: {
@@ -5358,6 +5401,12 @@ function stringifyToolResult(result: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/** Event-bus payloads carry their reply channel as a plain callback; this is the lint-safe
+ * way (no type assertions allowed in this repo) to accept one from an unknown payload. */
+function isHostRespondFn(value: unknown): value is (reply: unknown) => void {
+  return typeof value === "function";
 }
 
 function getProperty(value: unknown, key: string): unknown {
