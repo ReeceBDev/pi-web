@@ -24,6 +24,7 @@ import { SessionStorageSessionSelectionMemory } from "../controllers/sessionSele
 import { SessionStorageWorkspaceSelectionMemory } from "../controllers/workspaceSelection";
 import { KeyboardShortcutDispatcher } from "../keyboardShortcuts";
 import { selectedMachineId, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection } from "../controllers/types";
+import { flushVanishDiags, vanishDiag } from "../vanishDiagnostics";
 import { machineSessionKey } from "../machineKeys";
 import { HttpRequestError } from "../api/http";
 import { sessionCleanupRequestKey } from "../sessionCleanupUi";
@@ -345,6 +346,9 @@ export class PiWebApp extends LitElement {
     this.appShell.repairViewportPosition();
     this.retryPendingRemoteRouteRestoreSoon();
   };
+  private readonly onPageHide = () => {
+    flushVanishDiags();
+  };
   private readonly onSystemLightThemeChange = () => {
     if (this.themePreference.auto) this.applyPreferredTheme(false);
   };
@@ -447,7 +451,15 @@ export class PiWebApp extends LitElement {
     this.unreadConnected = true;
     window.addEventListener("popstate", this.onPopState);
     window.addEventListener("pageshow", this.onPageShow);
+    window.addEventListener("pagehide", this.onPageHide);
     this.browserResume.connect();
+    // Boot marker: pairs with any later vanish-candidate so a report shows the
+    // full page lifetime (including mobile reloads, which reset client state).
+    vanishDiag("boot", {
+      urlSession: new URLSearchParams(window.location.search).get("session"),
+      urlWorkspace: new URLSearchParams(window.location.search).get("workspace"),
+      navType: performance.getEntriesByType("navigation")[0]?.entryType,
+    });
     window.addEventListener("keydown", this.onKeyDown, GLOBAL_SHORTCUT_LISTENER_OPTIONS);
     window.addEventListener("focusin", this.resetKeyboardSequence);
     window.addEventListener("blur", this.resetKeyboardSequence);
@@ -469,6 +481,7 @@ export class PiWebApp extends LitElement {
     this.sessionUnread.retainMachines(new Set<string>());
     window.removeEventListener("popstate", this.onPopState);
     window.removeEventListener("pageshow", this.onPageShow);
+    window.removeEventListener("pagehide", this.onPageHide);
     this.browserResume.disconnect();
     window.removeEventListener("keydown", this.onKeyDown, GLOBAL_SHORTCUT_LISTENER_OPTIONS);
     window.removeEventListener("focusin", this.resetKeyboardSequence);
@@ -556,6 +569,7 @@ export class PiWebApp extends LitElement {
   }
 
   private handleBrowserResumeSignal(): void {
+    vanishDiag("browser-resume");
     this.appShell.repairViewportPosition();
     this.schedulePiWebStatusRefresh();
     this.retryPendingRemoteRouteRestoreSoon();
@@ -565,7 +579,7 @@ export class PiWebApp extends LitElement {
     await this.sessionUnread.refreshAll();
     await Promise.all([
       this.sessions.refreshSelectedSession(),
-      this.sessions.refreshCurrentWorkspaceSessions(),
+      this.sessions.refreshCurrentWorkspaceSessions(selectedMachineId(this.state), "browser-resume"),
       this.refreshMachineStatusSnapshots(),
       this.refreshWorkspaceDeletionRuns(),
       this.refreshCurrentWorkspaceSurface(),
@@ -1590,7 +1604,7 @@ export class PiWebApp extends LitElement {
       (event) => { this.handleRealtimeEvent(machineId, event); },
       () => {
         // Live broadcasts are not replayed after a connection gap.
-        void this.sessions.refreshCurrentWorkspaceSessions(machineId);
+        void this.sessions.refreshCurrentWorkspaceSessions(machineId, "socket-reconnect");
         void this.sessionUnread.refresh(machineId);
         void this.serverNotices.refresh(machineId);
       },

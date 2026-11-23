@@ -21,6 +21,7 @@ import { registerLocalHtmlFileRoutes } from "./localHtmlFileRoutes.js";
 import { registerProjectTrustRoutes } from "./projectTrustRoutes.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaces/workspaceDeletionRoutes.js";
 import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
+import { registerClientDiagnosticsRoutes } from "./clientDiagnosticsRoutes.js";
 import { PiWebPluginManifestRuntimeError, PiWebPluginService } from "./piWebPluginService.js";
 import { createActiveProfilePiPackageService, type PiPackageService } from "./piPackageService.js";
 import { registerPiPackageRoutes } from "./piPackageRoutes.js";
@@ -273,6 +274,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   const invalidatingConfigService = invalidatePiWebStatusOnWrite(configService, piWebStatusCache);
   registerConfigRoutes(app, invalidatingConfigService);
   registerLocalMachineConfigRoutes(app, invalidatingConfigService);
+  registerClientDiagnosticsRoutes(app);
 
   registerMachineRoutes(app, machines);
   registerMachinePluginProxyRoutes(app, machines);

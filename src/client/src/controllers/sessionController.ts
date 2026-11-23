@@ -20,7 +20,12 @@ import { isSessionActive } from "../../../shared/activity";
 import type { PromptAttachmentDelivery, SessionNotificationInboxEvent, SessionStartupProgressEvent } from "../../../shared/apiTypes";
 import { InMemorySessionSelectionMemory, markSessionArchived, markSessionsArchived, selectPreferredSession, selectionAfterArchivingSession, selectionAfterArchivingSessions, shouldDeselectAfterArchivedCollapse, type SessionSelectionMemory } from "./sessionSelection";
 import { selectedMachineId, type GetState, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection, type SetState, type UpdateUrl } from "./types";
+import { vanishDiag } from "../vanishDiagnostics";
 import { TrailingRefreshCoordinator } from "./trailingRefreshCoordinator";
+
+/** Why a workspace session-list refresh ran; every refresh that comes back
+ * without the selected session logs this so the trigger is visible in Loki. */
+export type VanishRefreshReason = "browser-resume" | "socket-reconnect" | "cleanup" | "unspecified";
 
 const MESSAGE_PAGE_SIZE = 100;
 const PENDING_SESSION_START_SCOPE = ["machine", "project", "workspace", "session"] as const;
@@ -1202,10 +1207,10 @@ export class SessionController {
         else if (selectionChange.type === "clear") await this.clearSessionAfterNavigation(expected);
       }
     }
-    await this.refreshCurrentWorkspaceSessions(machineId);
+    await this.refreshCurrentWorkspaceSessions(machineId, "cleanup");
   }
 
-  async refreshCurrentWorkspaceSessions(machineId = selectedMachineId(this.getState())): Promise<void> {
+  async refreshCurrentWorkspaceSessions(machineId = selectedMachineId(this.getState()), reason: VanishRefreshReason = "unspecified"): Promise<void> {
     const workspace = this.getState().selectedWorkspace;
     if (workspace === undefined) return;
     try {
@@ -1232,8 +1237,27 @@ export class SessionController {
         if (refreshedSelected !== selectedSession) this.setState({ selectedSession: refreshedSelected });
         return;
       }
-      console.info("[vanish3] resume list:", { fetched: fetchedSessions.length, selInList: sessions.some((session) => session.id === selectedSession.id), lifeline: sessions.filter((session) => isCachedNewSessionInfo(session)).length });
+      // The refresh came back without the session the user is looking at. This
+      // branch IS the vanish: selection moves to another chat (or clears) right
+      // under the composer. selInFetched separates the two culprits — false
+      // means the server listing omitted the session; true means a client-side
+      // merge (lifelines, suppressed created, pending starts) dropped it.
+      const selInFetched = fetchedSessions.some((session) => session.id === selectedSession.id);
       const next = sessions.find((session) => session.archived !== true) ?? sessions[0];
+      vanishDiag("vanish-candidate", {
+        reason,
+        machineId,
+        workspace: workspace.path,
+        fetched: fetchedSessions.length,
+        listed: sessions.length,
+        selInFetched,
+        selectedId: selectedSession.id,
+        selectedName: selectedSession.name,
+        selectedPersisted: selectedSession.persisted,
+        selectedMessages: selectedSession.messageCount,
+        lifelines: sessions.filter((session) => isCachedNewSessionInfo(session)).length,
+        nextId: next?.id,
+      });
       if (next !== undefined) await this.selectSessionAfterNavigation(next, expected);
       else await this.clearSessionAfterNavigation(expected);
     } catch (error) {
@@ -2285,6 +2309,7 @@ export class SessionController {
     const machineId = selectedMachineId(state);
     const isCurrentWorkspace = state.selectedWorkspace?.path === session.cwd;
     if (isCurrentWorkspace && this.hasPendingStartFor(session.cwd, machineId)) {
+      vanishDiag("created-suppressed", { sessionId: session.id, cwd: session.cwd, machineId });
       this.suppressedCreatedSessions.set(session.id, { session, machineId });
       return;
     }
@@ -2300,6 +2325,7 @@ export class SessionController {
       ...(cached !== undefined ? { sessionsByWorkspacePath: { ...state.sessionsByWorkspacePath, [session.cwd]: upsert(cached) } } : {}),
       ...(isCurrentWorkspace ? { sessions: upsert(state.sessions) } : {}),
     });
+    if (isCurrentWorkspace) vanishDiag("created-upsert", { sessionId: session.id, cwd: session.cwd, machineId });
   }
 
   private applyActivity(activity: SessionActivity) {
