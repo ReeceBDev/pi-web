@@ -440,14 +440,9 @@ export interface Workspace {
 /** Workspace as listed by the workspace authority, before the browser route layer attaches the wire-required effectiveConfig. */
 export type WorkspaceListing = Omit<Workspace, "effectiveConfig">;
 
-/** One catalog workspace: the host workspace plus its session list. */
-export interface CatalogWorkspace extends Workspace {
-  readonly sessions: SessionInfo[];
-}
-
-/** One catalog project: the project plus every workspace with its sessions. */
+/** One catalog project: the project plus its workspace metadata (no session lists; sessions load per workspace and arrive live through session.created). */
 export interface CatalogProject extends Project {
-  readonly workspaces: CatalogWorkspace[];
+  readonly workspaces: Workspace[];
 }
 
 /** One-request bulk listing served by GET /projects/catalog. */

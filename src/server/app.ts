@@ -100,20 +100,17 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
     }
   });
 
-  // One-request bulk listing: every project, its workspaces, and each
-  // workspace's sessions. A workspace whose session list fails contributes an
-  // empty list so one dead workspace cannot blank the whole catalog.
-  // The fan-out runs one sessiond listing per workspace and takes seconds at
-  // scale (~166 workspaces here), which timed out every fresh client boot and
-  // rendered a blank app — so the response is cached with stale-while-revalidate
-  // and a fresh catalog lags changes by up to the TTL.
-  // ponytail: no cache invalidation on project/session mutations; add one if
-  // catalog freshness outranks fast boots.
+  // One-request listing: every project and its workspaces. The catalog carries
+  // no session lists: a per-workspace session fan-out here re-scanned every
+  // session file in every workspace and took seconds at scale (~166
+  // workspaces), which timed out fresh client boots. Sessions load per
+  // workspace when the workspace opens (GET /sessions?cwd=...), and a created
+  // session reaches open clients through the global session.created event.
   const catalogCache = createTtlCache(async () => {
     const all = await projects.list();
     return { projects: await Promise.all(all.map(async (project) => ({
       ...project,
-      workspaces: await catalogWorkspaces(options.sessionDaemon, project, workspaces, options.config),
+      workspaces: await catalogWorkspaces(project, workspaces, options.config),
     }))) };
   }, { onError: (error) => { app.log.warn({ err: error }, "failed to refresh project catalog cache"); } });
   app.get(`${prefix}/projects/catalog`, async (_request, reply) => {
@@ -126,28 +123,12 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
 }
 
 async function catalogWorkspaces(
-  sessionDaemon: SessionProxyDaemon | undefined,
   project: Project,
   workspaces: WorkspaceCatalog,
   config?: Pick<PiWebConfigService, "read">,
 ) {
   const resolution = await resolveWorkspacesWithEffectiveConfig(project, workspaces, config);
-  return Promise.all(resolution.workspaces.map(async (workspace) => ({
-    ...workspace,
-    sessions: await workspaceSessions(sessionDaemon, workspace.path),
-  })));
-}
-
-async function workspaceSessions(sessionDaemon: SessionProxyDaemon | undefined, workspacePath: string): Promise<unknown[]> {
-  if (sessionDaemon === undefined) return [];
-  try {
-    const upstream = await sessionDaemon.request("GET", `/sessions?cwd=${encodeURIComponent(workspacePath)}`);
-    if (upstream.statusCode < 200 || upstream.statusCode >= 300) return [];
-    const sessions: unknown = JSON.parse(upstream.body);
-    return Array.isArray(sessions) ? Array.from<unknown>(sessions) : [];
-  } catch {
-    return [];
-  }
+  return resolution.workspaces;
 }
 
 async function resolveWorkspacesWithEffectiveConfig(
