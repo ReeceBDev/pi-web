@@ -664,7 +664,7 @@ describe("API parsers", () => {
     })).toThrow("Invalid session warning severity");
   });
 
-  it("parses the project catalog with nested workspaces and session lists", () => {
+  it("parses the project catalog with nested workspaces and no session lists", () => {
     expect(parseProjectCatalog({
       projects: [{
         id: "p1",
@@ -678,7 +678,6 @@ describe("API parsers", () => {
           label: "main",
           isMain: true,
           effectiveConfig: { uploads: { defaultFolder: ".pi-web/uploads" } },
-          sessions: [{ id: "s1", cwd: "/repo", path: "/repo/.pi/sessions/s1", created: "now", modified: "now", messageCount: 2, firstMessage: "hello" }],
         }],
       }],
     })).toEqual({
@@ -694,14 +693,13 @@ describe("API parsers", () => {
           label: "main",
           isMain: true,
           effectiveConfig: { uploads: { defaultFolder: ".pi-web/uploads" } },
-          sessions: [{ id: "s1", cwd: "/repo", path: "/repo/.pi/sessions/s1", created: "now", modified: "now", messageCount: 2, firstMessage: "hello" }],
         }],
       }],
     });
   });
 
-  it("rejects a catalog workspace without a session list", () => {
-    expect(() => parseProjectCatalog({
+  it("accepts a catalog workspace without a session list", () => {
+    expect(parseProjectCatalog({
       projects: [{
         id: "p1",
         name: "Repo",
@@ -709,7 +707,15 @@ describe("API parsers", () => {
         createdAt: "now",
         workspaces: [{ id: "w1", projectId: "p1", path: "/repo", label: "main", isMain: true, effectiveConfig: {} }],
       }],
-    })).toThrow("Expected array response");
+    })).toEqual({
+      projects: [{
+        id: "p1",
+        name: "Repo",
+        path: "/repo",
+        createdAt: "now",
+        workspaces: [{ id: "w1", projectId: "p1", path: "/repo", label: "main", isMain: true, effectiveConfig: {} }],
+      }],
+    });
   });
 
   it("parses workspace effective upload and attachments config without retaining the removed top-level branch alias", () => {

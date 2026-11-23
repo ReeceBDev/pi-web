@@ -2282,16 +2282,24 @@ export class SessionController {
 
   private applyCreatedSession(session: SessionInfo) {
     const state = this.getState();
-    // Session trees are worktree-scoped, so a session created elsewhere has no
-    // bearing on this listing.
-    if (state.selectedWorkspace?.path !== session.cwd) return;
-    if (state.sessions.some((candidate) => candidate.id === session.id)) return;
     const machineId = selectedMachineId(state);
-    if (this.hasPendingStartFor(session.cwd, machineId)) {
+    const isCurrentWorkspace = state.selectedWorkspace?.path === session.cwd;
+    if (isCurrentWorkspace && this.hasPendingStartFor(session.cwd, machineId)) {
       this.suppressedCreatedSessions.set(session.id, { session, machineId });
       return;
     }
-    this.setState({ sessions: [session, ...state.sessions] });
+    // The event drives every already-loaded list for this workspace: the open
+    // workspace view and the per-workspace cache, so returning to the
+    // workspace does not resurrect a list that predates the session. Lists
+    // for unloaded workspaces stay unloaded — opening the workspace fetches
+    // fresh server truth, so a single-entry list is never fabricated here.
+    const upsert = (list: readonly SessionInfo[]): SessionInfo[] =>
+      list.some((candidate) => candidate.id === session.id) ? [...list] : [session, ...list];
+    const cached = state.sessionsByWorkspacePath[session.cwd];
+    this.setState({
+      ...(cached !== undefined ? { sessionsByWorkspacePath: { ...state.sessionsByWorkspacePath, [session.cwd]: upsert(cached) } } : {}),
+      ...(isCurrentWorkspace ? { sessions: upsert(state.sessions) } : {}),
+    });
   }
 
   private applyActivity(activity: SessionActivity) {
@@ -2305,9 +2313,14 @@ export class SessionController {
     const state = this.getState();
     const isSelected = state.selectedSession?.id === status.sessionId;
     const clearsStaleActivity = state.sessionActivities[status.sessionId]?.phase === "active" && !isSessionActive(status);
+    const messageCount = status.messageCount;
+    const cachedLists = messageCount === undefined
+      ? undefined
+      : this.patchLoadedWorkspaceLists(status.sessionId, (session) => ({ ...session, messageCount }));
     this.setState({
       sessionStatuses: { ...state.sessionStatuses, [status.sessionId]: status },
       ...sessionMessageCountPatch(state, status.sessionId, status.messageCount),
+      ...(cachedLists !== undefined ? { sessionsByWorkspacePath: cachedLists } : {}),
       ...(clearsStaleActivity ? { sessionActivities: omitSessionActivity(state.sessionActivities, status.sessionId) } : {}),
       status: isSelected ? status : state.status,
       activity: isSelected && clearsStaleActivity ? undefined : state.activity,
@@ -2372,7 +2385,7 @@ export class SessionController {
   }
 
   private applySessionName(sessionId: string, name: string | undefined) {
-    const rename = (session: SessionInfo) => {
+    const rename = (session: SessionInfo): SessionInfo => {
       if (session.id !== sessionId) return session;
       const next = { ...session };
       if (name === undefined || name === "") delete next.name;
@@ -2380,10 +2393,28 @@ export class SessionController {
       return next;
     };
     const selectedSession = this.getState().selectedSession;
+    const cachedLists = this.patchLoadedWorkspaceLists(sessionId, rename);
     this.setState({
       sessions: this.getState().sessions.map(rename),
       selectedSession: selectedSession === undefined ? undefined : rename(selectedSession),
+      ...(cachedLists !== undefined ? { sessionsByWorkspacePath: cachedLists } : {}),
     });
+  }
+
+  /**
+   * Rewrite one session inside every already-loaded per-workspace cache.
+   * Returns the replacement map, or undefined when no loaded list contains
+   * the session (callers then omit the field instead of writing an identical
+   * map). Unloaded workspaces are never touched: their lists do not exist.
+   */
+  private patchLoadedWorkspaceLists(sessionId: string, patch: (session: SessionInfo) => SessionInfo): Record<string, SessionInfo[]> | undefined {
+    const cached = this.getState().sessionsByWorkspacePath;
+    let next: Record<string, SessionInfo[]> | undefined;
+    for (const [path, list] of Object.entries(cached)) {
+      if (!list.some((session) => session.id === sessionId)) continue;
+      (next ??= { ...cached })[path] = list.map((session) => (session.id === sessionId ? patch(session) : session));
+    }
+    return next;
   }
 
   private applyEvent(event: SessionUiEvent) {

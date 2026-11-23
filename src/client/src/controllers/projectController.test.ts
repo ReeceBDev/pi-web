@@ -489,11 +489,15 @@ describe("ProjectController", () => {
     expect(clearSelection).toHaveBeenCalledOnce();
   });
 
-  it("populates projects, workspaces, and sessions from one catalog request", async () => {
+  it("populates projects and workspaces from one catalog request without touching session lists", async () => {
     const repo = project("p1", "/repo");
     const main = workspace(repo.id, repo.path);
-    const catalogSession: SessionInfo = { id: "s1", cwd: main.path, path: `${main.path}/.pi/s1`, created: "now", modified: "now", messageCount: 1, firstMessage: "hello" };
-    let state: AppState = { ...initialAppState() };
+    let state: AppState = {
+      ...initialAppState(),
+      // A previously loaded per-workspace cache must survive the refresh: the
+      // catalog no longer carries session lists, so it cannot rebuild them.
+      sessionsByWorkspacePath: { [main.path]: [{ id: "loaded", cwd: main.path, path: `${main.path}/.pi/loaded`, created: "now", modified: "now", messageCount: 1, firstMessage: "hello" }] },
+    };
     const setState = (patch: Partial<AppState>) => { state = { ...state, ...patch }; };
     const projects = vi.fn();
     const controller = new ProjectController(
@@ -502,7 +506,7 @@ describe("ProjectController", () => {
       { selectProject: vi.fn(), forgetProject: vi.fn(), clearSelection: vi.fn() },
       {
         api: {
-          catalog: vi.fn().mockResolvedValue({ projects: [{ ...repo, workspaces: [{ ...main, sessions: [catalogSession] }] }] }),
+          catalog: vi.fn().mockResolvedValue({ projects: [{ ...repo, workspaces: [{ ...main }] }] }),
           projects,
           addProject: vi.fn(),
           closeProject: vi.fn(),
@@ -516,8 +520,9 @@ describe("ProjectController", () => {
 
     expect(projects).not.toHaveBeenCalled();
     expect(state.projects.map((candidate) => candidate.id)).toEqual([repo.id]);
-    expect(state.workspacesByProjectId).toEqual({ [repo.id]: [{ ...main, sessions: [catalogSession] }] });
-    expect(state.sessionsByWorkspacePath).toEqual({ [main.path]: [catalogSession] });
+    expect(state.workspacesByProjectId).toEqual({ [repo.id]: [{ ...main }] });
+    // No session lists come from the catalog, and loaded caches are kept, not reset.
+    expect(state.sessionsByWorkspacePath[main.path]?.map((session) => session.id)).toEqual(["loaded"]);
     expect(state.isLoadingProjects).toBe(false);
   });
 
