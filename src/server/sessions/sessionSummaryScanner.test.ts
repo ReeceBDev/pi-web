@@ -348,13 +348,14 @@ describe("session summary scanner memo", () => {
     expect(await coldListing(sessionDir)).toEqual(cold);
   });
 
-  it("re-scans a grown file whole", async () => {
+  it("folds a grown file's appended tail without rereading earlier bytes", async () => {
     const path = await writeSession("grown.jsonl", [
       headerLine({ id: "grown", cwd: WORKSPACE }),
       messageLine({ role: "user", content: textContent("first question") }),
       messageLine({ role: "assistant", content: textContent("first answer") }),
     ]);
-    const scanner = new SessionSummaryScanner();
+    const modes: [string, string][] = [];
+    const scanner = new SessionSummaryScanner({ onScan: (filePath, mode) => modes.push([filePath, mode]) });
     expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "grown", messageCount: 2, firstMessage: "first question" }]);
 
     await appendFile(
@@ -365,6 +366,34 @@ describe("session summary scanner memo", () => {
 
     const warm = await scanner.scanSessionSummariesInDir(sessionDir);
     expect(warm).toMatchObject([{ id: "grown", messageCount: 4, firstMessage: "first question", name: "Renamed later" }]);
+    expect(warm).toEqual(await coldListing(sessionDir));
+    // The appended bytes were folded incrementally; the next listing is stat-only again.
+    expect(modes).toEqual([
+      [path, "full"],
+      [path, "tail"],
+    ]);
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toEqual(warm);
+    expect(modes).toEqual([
+      [path, "full"],
+      [path, "tail"],
+      [path, "memo"],
+    ]);
+  });
+
+  it("keeps a torn final message's transient count on stat-only listings", async () => {
+    // The memo never folds the unterminated tail; its stored bytes are folded
+    // in for display, so a torn line counted by one listing stays counted by
+    // the next stat-only listing, and is counted exactly once more when the
+    // writer completes it.
+    const path = await writeSession("torn.jsonl", [headerLine({ id: "torn", cwd: WORKSPACE }), messageLine({ role: "user", content: textContent("start") })]);
+    await appendFile(path, messageLine({ role: "assistant", content: textContent("streaming") }), "utf8");
+    const scanner = new SessionSummaryScanner();
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "torn", messageCount: 2 }]);
+    expect(await scanner.scanSessionSummariesInDir(sessionDir)).toMatchObject([{ id: "torn", messageCount: 2 }]);
+
+    await appendFile(path, `\n${messageLine({ role: "user", content: textContent("after") })}\n`, "utf8");
+    const warm = await scanner.scanSessionSummariesInDir(sessionDir);
+    expect(warm).toMatchObject([{ id: "torn", messageCount: 3, firstMessage: "start" }]);
     expect(warm).toEqual(await coldListing(sessionDir));
   });
 
