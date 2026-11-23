@@ -115,8 +115,18 @@ export class WorkspaceController {
     this.setState({ selectedWorkspace: workspace, isLoadingWorkspaces: false, ...resetWorkspaceScopedState() });
     try {
       const cachedSessions = this.getState().sessionsByWorkspacePath[workspace.path];
-      const loadedSessions = cachedSessions
-        ?? (target?.signal === undefined
+      // A cached listing predates any session created after it was fetched —
+      // on the phone (push flow), in another tab, or from a CLI. When the
+      // restore names a specific session and the cache does not contain it,
+      // trusting the cache would report a false "Session not found" and hide
+      // the row: ignore the cache, fetch fresh server truth, and write it
+      // back below so the workspace list converges too.
+      const cacheLacksTarget = target?.sessionId !== undefined
+        && target.sessionId !== ""
+        && !(cachedSessions?.some((session) => session.id === target.sessionId) ?? false);
+      const loadedSessions = cachedSessions !== undefined && !cacheLacksTarget
+        ? cachedSessions
+        : (target?.signal === undefined
           ? await this.api.sessions(workspace.path, machineId)
           : await this.api.sessions(workspace.path, machineId, { signal: target.signal }));
       // mergeCachedNewSessions rewrites the cached-new-session storage; like the
@@ -137,7 +147,9 @@ export class WorkspaceController {
         sessions,
         // A fresh listing is newer than the catalog snapshot; write it back so
         // returning to this workspace does not resurrect a stale session list.
-        ...(cachedSessions === undefined ? { sessionsByWorkspacePath: { ...this.getState().sessionsByWorkspacePath, [workspace.path]: loadedSessions } } : {}),
+        // This includes the cacheLacksTarget refetch above: the fresh list
+        // replaces the cache that was missing the requested session.
+        ...(cachedSessions === undefined || cacheLacksTarget ? { sessionsByWorkspacePath: { ...this.getState().sessionsByWorkspacePath, [workspace.path]: loadedSessions } } : {}),
       });
       const session = this.sessions.preferredSession(workspace.path, sessions, target?.sessionId);
       if (!this.navigationIsCurrent(navigation) || !workspaceMutationIsCurrent(target)) return;
