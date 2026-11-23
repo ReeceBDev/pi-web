@@ -841,9 +841,8 @@ describe("WorkspaceController catalog caches", () => {
       vi.fn().mockResolvedValue([main]),
       { loadSessions },
     );
-    (test.sessions.preferredSession as ReturnType<typeof vi.fn>).mockImplementation(
-      (_path: string, sessions: readonly SessionInfo[], targetSessionId?: string) =>
-        sessions.find((candidate) => candidate.id === targetSessionId),
+    vi.mocked(test.sessions.preferredSession).mockImplementation(
+      (_path, sessions, targetSessionId) => sessions.find((candidate) => candidate.id === targetSessionId) ?? undefined,
     );
 
     const result = await test.controller.selectWorkspace(main, { sessionId: createdElsewhere.id });
@@ -870,9 +869,8 @@ describe("WorkspaceController catalog caches", () => {
       vi.fn().mockResolvedValue([main]),
       { loadSessions },
     );
-    (test.sessions.preferredSession as ReturnType<typeof vi.fn>).mockImplementation(
-      (_path: string, sessions: readonly SessionInfo[], targetSessionId?: string) =>
-        sessions.find((candidate) => candidate.id === targetSessionId),
+    vi.mocked(test.sessions.preferredSession).mockImplementation(
+      (_path, sessions, targetSessionId) => sessions.find((candidate) => candidate.id === targetSessionId) ?? undefined,
     );
 
     const result = await test.controller.selectWorkspace(main, { sessionId: cached.id });
