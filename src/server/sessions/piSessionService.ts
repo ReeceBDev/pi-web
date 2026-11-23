@@ -416,6 +416,13 @@ export interface PiSessionManagerGateway {
    */
   invalidateSessionFile(sessionFile: string): void;
   /**
+   * Scan one session dir purely to fill the listing summary memo, so the first
+   * workspace open never pays a cold scan after a daemon start. Returns the
+   * number of sessions scanned. Meaningful for default-store dirs only: the
+   * background warmer knows the default pi store root, not configured dirs.
+   */
+  warmSessionSummariesInDir(sessionDir: string): Promise<number>;
+  /**
    * Read the active transcript branch without creating a runtime or writing the file.
    * Resolves `undefined` when the transcript file is absent (never persisted or
    * externally removed): there is no disk snapshot, and the runtime branch

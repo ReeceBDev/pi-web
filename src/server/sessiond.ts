@@ -22,7 +22,8 @@ import { bootstrapAndFreezeGlobalExtensionProviders } from "./sessions/globalPro
 import { registerAuthRoutes } from "./sessions/authRoutes.js";
 import { ModelCatalogRefresher } from "./sessions/modelCatalogRefresher.js";
 import { PiSessionService } from "./sessions/piSessionService.js";
-import { createPiSessionManagerGateway } from "./sessions/piSessionManagerGateway.js";
+import { createPiSessionManagerGateway, defaultPiSessionsRoot } from "./sessions/piSessionManagerGateway.js";
+import { SessionWorkspaceWarmer } from "./sessions/sessionWorkspaceWarmer.js";
 import { registerSessionRoutes } from "./sessions/sessionRoutes.js";
 import { SessionNotificationStore } from "./sessions/sessionNotificationStore.js";
 import { SessionArchiveStore, defaultSessionArchiveFilePath } from "./sessions/sessionArchiveStore.js";
@@ -293,6 +294,17 @@ async function createSessionDaemonRuntime() {
     });
     catalogRefresher.start();
     auth.subscribe(() => { catalogRefresher.requestRefresh(); });
+    // Warm the listing summaries of recently active workspaces in the default
+    // pi session store once startup has settled, so the first open of a
+    // workspace you used this week answers from the memo instead of a cold
+    // multi-megabyte scan. Configured (settings/env) session dirs are skipped:
+    // the warmer only knows the default store root.
+    const workspaceWarmer = new SessionWorkspaceWarmer({
+      sessionsRoot: defaultPiSessionsRoot(activeAgentProfile.dir),
+      scanSessionDir: (sessionDir) => sessionManager.warmSessionSummariesInDir(sessionDir),
+      logger: app.log,
+    });
+    workspaceWarmer.start();
     const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
     // Only dependency-ready providers can define the aggregate topology. The
     // runtime has already rejected any staged provider that depends on late
@@ -429,6 +441,7 @@ async function createSessionDaemonRuntime() {
           },
           serverPlugins,
           catalogRefresher,
+          workspaceWarmer,
           auth,
           sessions,
           unreadStore,
