@@ -743,7 +743,20 @@ export class SessionController {
     let view: Record<string, unknown>;
     try {
       const result = await this.api.pipelineRunStatus(runId);
-      if (!result.ok) return; // transient CLI/Temporal hiccup: keep polling silently
+      if (!result.ok) {
+        // A deleted workflow reports RUN_STATUS_FAILED with "workflow not
+        // found" in the detail — retrying can never succeed, so stop instead
+        // of polling a ghost run forever. Any other failure stays transient:
+        // keep polling silently.
+        if (result.reason === "RUN_STATUS_FAILED" && /workflow not found/i.test(result.detail)) {
+          this.stopPipelinePolling(runId);
+          if (pending.pipelineLastPhase !== "NOT_FOUND") {
+            pending.pipelineLastPhase = "NOT_FOUND";
+            this.appendPipelineLines(pending, [textMessage("system", "Pipeline run not found · status polling stopped")]);
+          }
+        }
+        return;
+      }
       view = result.view;
     } catch {
       return;

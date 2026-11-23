@@ -358,4 +358,54 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       harness.controller.dispose();
     }
   });
-});;
+
+  it("stops polling a run whose workflow no longer exists instead of polling the ghost forever", async () => {
+    const statusCalls: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-12" }),
+      pipelineRunStatus: (runId) => {
+        statusCalls.push(runId);
+        return Promise.resolve({ ok: false, reason: "RUN_STATUS_FAILED", detail: "workflow not found for ID: run-12" });
+      },
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    try {
+      await harness.controller.startSession({ pipeline: true });
+      await harness.controller.send("Build the thing");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush();
+
+      const texts = harness.state.messages.map((line) => line.parts[0]?.type === "text" ? line.parts[0].text : "");
+      expect(texts).toContain("Pipeline run not found · status polling stopped");
+      const callsAtStop = statusCalls.length;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(statusCalls.length).toBe(callsAtStop); // no retries against a deleted workflow
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
+  it("keeps polling through transient status failures", async () => {
+    const statusCalls: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-13" }),
+      pipelineRunStatus: (runId) => {
+        statusCalls.push(runId);
+        return Promise.resolve({ ok: false, reason: "RUN_STATUS_FAILED", detail: "ConnectionRefused: temporal unreachable" });
+      },
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    try {
+      await harness.controller.startSession({ pipeline: true });
+      await harness.controller.send("Build the thing");
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const callsBefore = statusCalls.length;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(statusCalls.length).toBeGreaterThan(callsBefore); // transient failure: poller keeps going
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+});
