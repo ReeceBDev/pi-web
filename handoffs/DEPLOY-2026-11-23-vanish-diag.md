@@ -22,11 +22,19 @@ Fork `/home/rbowen/pi/pi-web-fork`, branch `fix/chat-scroll-fling-guard-tail`, H
   `created-suppressed`, `lifeline-consumed` / `lifeline-readded`, plus boot and
   browser-resume markers with refresh reasons.
 - `1797d046` docs: relay handoff for the vanish-diagnostics chain.
-- (this leg) comment-only correction in the three new files: the sink is journald,
-  not Loki — see "Log sink correction" below.
+- Two docs commits landed on the branch AFTER the deployed build was cut and are
+  NOT in the deployed gateway: `ee547498` corrects the log-sink comments in the
+  three new files (comments only, no behavior; the deployed dist still carries
+  the old wording until the next rebuild — do not rebuild for this alone, and
+  note the tree currently carries another session's in-progress sessiond work,
+  so a rebuild before that lands would ship foreign WIP), and `a8a08198` adds
+  this record and the leg-2 handoff doc.
 
-This is instrumentation only. It does NOT change any vanish behavior; the
-follow-up fix awaits rbowen's explicit authorization once a vanish is caught.
+Deployed gateway build is exactly `1797d046` (cut from a clean tree at 18:50,
+verified free of the concurrent session's `sessionWorkspaceWarmer` work that
+appeared at 18:54). This deploy is instrumentation only: it does NOT change any
+vanish behavior; the follow-up fix awaits rbowen's explicit authorization once
+a vanish is caught with the new `vanish-diag` evidence.
 
 ## Deploy artifacts
 
@@ -41,6 +49,10 @@ follow-up fix awaits rbowen's explicit authorization once a vanish is caught.
 - Installed package: `~/.local/lib/node_modules/@jmfederico/pi-web/dist` moved to
   `dist.pre-vanish-diag-2026-11-23-1851`, new dist copied in from the release
 - New client bundle: `index-CrpG9JJn.js` (previous served: `index-2ILgiWem.js`)
+- Branch pushed to origin (`ReeceBDev/pi-web`) after the deploy, per the
+  unpushed-work-is-never-deployed law: origin/`fix/chat-scroll-fling-guard-tail`
+  = `a8a08198`, containing the deployed build commit `1797d046` and the two
+  docs commits above
 
 ## Restart
 
@@ -89,7 +101,6 @@ are corrected here for the next reader: `https://localhost:8504` never speaks TL
 TLS terminates at the router front door), and `pi-web-ui.service` (8505) serves
 its own install (`~/.local/lib/node_modules/pi-web-ui/web/dist`, bundle
 `index-3XU67qMh.js`) — it does not pick up the swapped `@jmfederico/pi-web` dist.
-
 ## Rollback (instant)
 
 - `rm ~/.config/systemd/user/pi-web.service.d/80-utc-qualified-4a87ee859a77-1797d046.conf`
