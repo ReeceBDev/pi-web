@@ -24,7 +24,7 @@ import { vanishDiag } from "../vanishDiagnostics";
 import { TrailingRefreshCoordinator } from "./trailingRefreshCoordinator";
 
 /** Why a workspace session-list refresh ran; every refresh that comes back
- * without the selected session logs this so the trigger is visible in Loki. */
+ * without the selected session logs this so the trigger is visible in the pi-web journal. */
 export type VanishRefreshReason = "browser-resume" | "socket-reconnect" | "cleanup" | "unspecified";
 
 const MESSAGE_PAGE_SIZE = 100;

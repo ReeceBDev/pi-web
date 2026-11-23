@@ -20,8 +20,8 @@ const DEFAULT_MAX_EVENT_CHARS = 2000;
  * Client-side diagnostics sink: the browser has no durable log of its own
  * state transitions, so vanish-class failures (a chat disappearing from the
  * session list) were invisible. The client batches its diagnostic events and
- * POSTs them here; each event is written as one tagged log line, which the
- * journal forwarder ships to Loki under `vanish-diag`.
+ * POSTs them here; each event is written as one `vanish-diag`-tagged line
+ * in the pi-web journal (journald — queryable with `journalctl --user -u pi-web`).
  */
 export function registerClientDiagnosticsRoutes(app: FastifyInstance, options: ClientDiagnosticsRouteOptions = {}): void {
   const maxEventsPerRequest = options.maxEventsPerRequest ?? DEFAULT_MAX_EVENTS;

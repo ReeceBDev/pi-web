@@ -18,7 +18,7 @@ let sink: VanishDiagSink = networkSink;
 /**
  * Record one client-side diagnostic event for server-side logging. Events are
  * batched and POSTed to the gateway's client-diagnostics sink, which writes
- * each one as a `vanish-diag` log line (journal → Loki). Used for the
+ * each one as a `vanish-diag` log line in the pi-web journal (journald). Used for the
  * session-list state transitions that decide whether an open chat stays
  * visible, so a vanished chat can be reconstructed from the server logs.
  * Never throws: diagnostics must not break the app path they observe.
