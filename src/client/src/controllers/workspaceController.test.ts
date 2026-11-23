@@ -825,6 +825,63 @@ describe("WorkspaceController catalog caches", () => {
     expect(test.state().sessionsByWorkspacePath).toEqual({ [main.path]: [remote] });
   });
 
+  it("refetches when the cached session list lacks the requested session", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const cached = session(main.path, "cached-1");
+    const createdElsewhere = session(main.path, "remote-1");
+    const loadSessions = vi.fn().mockResolvedValue([cached, createdElsewhere]);
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        sessionsByWorkspacePath: { [main.path]: [cached] },
+      },
+      vi.fn().mockResolvedValue([main]),
+      { loadSessions },
+    );
+    (test.sessions.preferredSession as ReturnType<typeof vi.fn>).mockImplementation(
+      (_path: string, sessions: readonly SessionInfo[], targetSessionId?: string) =>
+        sessions.find((candidate) => candidate.id === targetSessionId),
+    );
+
+    const result = await test.controller.selectWorkspace(main, { sessionId: createdElsewhere.id });
+
+    expect(result).toBeUndefined();
+    expect(loadSessions).toHaveBeenCalledWith(main.path, "local");
+    expect(test.sessions.selectSession).toHaveBeenCalledWith(createdElsewhere, expect.anything());
+    expect(test.state().sessions).toEqual([cached, createdElsewhere]);
+    expect(test.state().sessionsByWorkspacePath).toEqual({ [main.path]: [cached, createdElsewhere] });
+  });
+
+  it("keeps using the cached session list when it already contains the requested session", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const cached = session(main.path, "cached-1");
+    const loadSessions = vi.fn();
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        sessionsByWorkspacePath: { [main.path]: [cached] },
+      },
+      vi.fn().mockResolvedValue([main]),
+      { loadSessions },
+    );
+    (test.sessions.preferredSession as ReturnType<typeof vi.fn>).mockImplementation(
+      (_path: string, sessions: readonly SessionInfo[], targetSessionId?: string) =>
+        sessions.find((candidate) => candidate.id === targetSessionId),
+    );
+
+    const result = await test.controller.selectWorkspace(main, { sessionId: cached.id });
+
+    expect(result).toBeUndefined();
+    expect(loadSessions).not.toHaveBeenCalled();
+    expect(test.sessions.selectSession).toHaveBeenCalledWith(cached, expect.anything());
+  });
+
   it("drops the closed project's cached workspaces and session lists", () => {
     const closed = project("p1", "/closed");
     const remaining = project("p2", "/remaining");
