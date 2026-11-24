@@ -929,7 +929,7 @@ export class SessionController {
     const detail = typeof block?.["reason"] === "string" ? (finalPhase ?? phase) + " blocked · " + block["reason"]
       : view["action"] === "revising-modules" ? "Waiting for a revised module plan"
       : view["status"] === "diagnostic" ? "Selected phases finished"
-      : delivery ? "Verified delivery" : finalPhase;
+      : delivery ? "Verified delivery" : pipelineQueueDetail(view) ?? finalPhase;
     const part: ChatPart = {
       type: "pipelineCard", runId, phase, stale: pending.pipelineStale === true,
       ...(closeStatus === undefined ? {} : { closeStatus }), ...(card === undefined ? {} : { card }),
@@ -3084,12 +3084,18 @@ function agentActivityLines(value: unknown): ChatLine[] {
   return lines;
 }
 
+function pipelineQueueDetail(view: Record<string, unknown>): string | undefined {
+  return (view["phase"] === "WAITING_FOR_WORKER" || view["phase"] === "QUEUED") && typeof view["detail"] === "string"
+    ? view["detail"] : undefined;
+}
+
 function pipelineStatusSummary(view: Record<string, unknown>): string {
   const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
   const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : undefined;
   const card = optionalPipelineRecord(view, "card");
   const revision = card !== undefined && typeof card["revision"] === "number" ? ` · card rev ${String(card["revision"])}` : "";
-  return `${phase}${closeStatus === undefined ? "" : ` (${closeStatus})`}${revision}`;
+  const queue = pipelineQueueDetail(view);
+  return `${phase}${closeStatus === undefined ? "" : ` (${closeStatus})`}${revision}${queue !== undefined ? " · " + queue : ""}`;
 }
 
 /** The optional Record-valued field of a response payload, or undefined. */
