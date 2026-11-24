@@ -135,6 +135,27 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     expect(harness.state.clientQueuedSessionMessages[harness.state.selectedSession?.id ?? ""]).toBeUndefined();
   });
 
+  it("shows the original queue wait in the live card and in a typed status reply", async () => {
+    const detail = "Waiting for the first workflow task. Temporal reports no recent workflow poller on queue-a.";
+    const harness = makeController({
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-42" }),
+      pipelineRunStatus: () => Promise.resolve({ ok: true, view: { phase: "WAITING_FOR_WORKER", detail } }),
+    }, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+    try {
+      await harness.controller.startSession({ pipeline: true });
+      await harness.controller.send("Build the sample");
+      await flush();
+      await harness.controller.send("status");
+      await flush();
+      const parts = harness.state.messages.flatMap(message => message.parts);
+      expect(parts).toContainEqual(expect.objectContaining({ type: "pipelineCard", phase: "WAITING_FOR_WORKER", detail }));
+      expect(parts).toContainEqual(expect.objectContaining({ type: "text", text: "Pipeline status · run-42 · WAITING_FOR_WORKER · " + detail }));
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
   it("submits an approve decision and renders the receipt", async () => {
     const decisions: [string, string][] = [];
     const api: typeof defaultApi = {
