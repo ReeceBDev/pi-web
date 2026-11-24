@@ -127,6 +127,8 @@ export const emptyTranscriptApi: typeof api = {
   // Pipeline status polls hit the real CLI spawn route when unmocked; keep
   // them silent (pollPipelineRun ignores ok:false) in suites that never mock it.
   pipelineRunStatus: () => Promise.resolve({ ok: false, reason: "pipeline_status_unmocked", detail: "" }),
+  // Same for the run-list recovery call in refresh/selectWorkspace paths.
+  pipelineRuns: () => Promise.resolve({ ok: false, reason: "pipeline_runs_unmocked", detail: "" }),
   transcriptSnapshot: (session) => Promise.resolve({
     page: emptyPage,
     status: status(sessionLookupId(session)),

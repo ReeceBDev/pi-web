@@ -43,7 +43,7 @@ import { registerMachineRoutes } from "./machines/machineRoutes.js";
 import { registerSupervisorRoutes } from "./machines/supervisorRoutes.js";
 import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
 import { registerPipelineRoutes } from "./machines/pipelineRoutes.js";
-import type { PipelineDecisionDelegate, PipelineRunDelegate, PipelineStatusDelegate } from "./machines/pipelineRoutes.js";
+import type { PipelineDecisionDelegate, PipelineListDelegate, PipelineRunDelegate, PipelineStatusDelegate } from "./machines/pipelineRoutes.js";
 import { registerMachineProxyRoutes } from "./machines/machineProxyRoutes.js";
 import { registerPluginBackendChannelProxyRoutes } from "./plugins/pluginBackendChannelProxyRoutes.js";
 import { installPluginBackendChannelWebSocketPayloadLimit } from "./webSocketBridge.js";
@@ -59,8 +59,8 @@ export interface AppDependencies {
   unitSupervisor?: UnitSupervisorDelegate;
   /** Pipeline run launch target; tests inject a stubbed CLI client. */
   pipelineRunner?: PipelineRunDelegate;
-  /** Pipeline status/decision CLI target; tests inject a stubbed CLI client. */
-  pipelineCommands?: PipelineStatusDelegate & PipelineDecisionDelegate;
+  /** Pipeline status/decision/list CLI target; tests inject a stubbed CLI client. */
+  pipelineCommands?: PipelineStatusDelegate & PipelineDecisionDelegate & PipelineListDelegate;
   sessionDaemon?: SessionProxyDaemon;
   agentProfileProvider?: ActiveAgentProfileProvider;
   piWebPlugins?: Pick<PiWebPluginService, "manifest" | "plugins" | "readAsset">;

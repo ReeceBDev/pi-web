@@ -1,4 +1,4 @@
-import type { SessionInfo } from "./api";
+import type { SessionInfo, PipelineRunListEntry } from "./api";
 import { createMemoryStorage } from "./cachedNewSessions";
 
 /** Launched pipeline run rows survive reloads. The live pending start dies
@@ -45,6 +45,25 @@ export function rememberPipelineRun(run: CachedPipelineRunInfo, storage: Storage
 export function forgetPipelineRun(runId: string, machineId = defaultMachineId, storage: Storage | undefined = browserStorage()): void {
   const runs = loadPipelineRuns(storage).filter((candidate) => candidate.runId !== runId || candidate.machineId !== machineId);
   savePipelineRuns(runs, storage);
+}
+
+/** Recover the run list from the gateway when the local cache holds no row for
+ * this workspace+machine (a fresh browser must not lose its runs). Rows
+ * carrying their own cwd seed other workspaces too; cwd-less (memo-less) rows
+ * are attributed to the requesting workspace — the CLI never invents values,
+ * the merge decides. Returns true when the cache gained rows. */
+export async function recoverPipelineRuns(cwd: string, machineId: string, fetchRuns: () => Promise<PipelineRunListEntry[]>, storage: Storage | undefined = browserStorage()): Promise<boolean> {
+  if (loadPipelineRuns(storage).some((run) => run.machineId === machineId && run.cwd === cwd)) return false;
+  let runs: PipelineRunListEntry[];
+  try {
+    runs = await fetchRuns();
+  } catch {
+    return false;
+  }
+  for (const run of runs) {
+    rememberPipelineRun({ runId: run.runId, cwd: run.cwd ?? cwd, goal: run.goal, created: run.created, machineId }, storage);
+  }
+  return runs.length > 0;
 }
 
 /** Restored rows carry pipelineRunId so the controller can register a live

@@ -407,6 +407,105 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     }
   });
 
+  it("keeps polling when a status call hangs past the watchdog instead of pinning the poller", async () => {
+    const statusCalls: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-14" }),
+      pipelineRunStatus: (runId) => {
+        statusCalls.push(runId);
+        return new Promise(() => undefined); // the status call hangs forever
+      },
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5, pipelinePollTimeoutMs: 25 });
+    try {
+      await harness.controller.startSession({ pipeline: true });
+      await harness.controller.send("Build the flinger fix");
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      expect(statusCalls.length).toBeGreaterThan(2); // the watchdog freed the interval to keep firing
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
+  it("revives the poller when a closed run's row is reselected", async () => {
+    const views: Record<string, unknown>[] = [
+      { phase: "INTAKE" },
+      { phase: "CLOSED", closeStatus: "COMPLETED" },
+    ];
+    const statusCalls: string[] = [];
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-15" }),
+      pipelineRunStatus: (runId) => {
+        statusCalls.push(runId);
+        return Promise.resolve({ ok: true, view: views[Math.min(statusCalls.length - 1, views.length - 1)] ?? {} });
+      },
+    };
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] }, { pipelinePollMs: 5 });
+    try {
+      await harness.controller.startSession({ pipeline: true });
+      await flush();
+      const row = harness.state.selectedSession;
+      if (row === undefined) throw new Error("pending pipeline row missing");
+      await harness.controller.send("Build the flinger fix");
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      await flush();
+
+      const texts = harness.state.messages.map((line) => line.parts[0]?.type === "text" ? line.parts[0].text : "");
+      expect(texts).toContain("Pipeline run closed · COMPLETED");
+      const callsAfterClose = statusCalls.length;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(statusCalls.length).toBe(callsAfterClose); // poller stopped on CLOSED
+
+      await harness.controller.selectSession(oldSession);
+      await flush();
+      await harness.controller.selectSession(row);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await flush();
+      expect(statusCalls.length).toBeGreaterThan(callsAfterClose); // reselect restarted the poller
+    } finally {
+      harness.controller.dispose();
+    }
+  });
+
+  it("recovers the run list from the gateway when the cache is empty and skips the refetch once seeded", async () => {
+    const storage = createMemoryStorage();
+    setPipelineRunStorageOverrideForTests(storage);
+    let listCalls = 0;
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      sessions: () => Promise.resolve([]),
+      pipelineRuns: () => {
+        listCalls += 1;
+        return Promise.resolve({
+          ok: true,
+          runs: [
+            { runId: "run-legacy", goal: "(recovered)", created: "2026-11-24T05:32:33.946Z", status: "COMPLETED" },
+            { runId: "run-other", goal: "Other workspace's run", cwd: "/other", created: "2026-11-24T05:32:00.000Z", status: "RUNNING" },
+          ],
+        });
+      },
+    };
+    try {
+      const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
+      await harness.controller.refreshCurrentWorkspaceSessions();
+
+      const restored = harness.state.sessions.find((session) => session.id === "run-legacy");
+      expect(restored).toBeDefined();
+      expect(restored?.firstMessage).toBe("(recovered)");
+      expect(restored?.cwd).toBe("/repo"); // cwd-less row attributed to the requesting workspace
+      expect(harness.state.sessions.some((session) => session.id === "run-other")).toBe(false);
+      expect(listCalls).toBe(1);
+
+      await harness.controller.refreshCurrentWorkspaceSessions();
+      expect(listCalls).toBe(1); // cache hit: no refetch once seeded
+    } finally {
+      setPipelineRunStorageOverrideForTests(undefined);
+    }
+  });
+
   it("keeps polling through transient status failures", async () => {
     const statusCalls: string[] = [];
     const api: typeof defaultApi = {

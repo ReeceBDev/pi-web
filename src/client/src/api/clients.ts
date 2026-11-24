@@ -30,6 +30,7 @@ import {
   parsePipelineRunAck,
   parsePipelineRunDecision,
   parsePipelineRunStatus,
+  parsePipelineRuns,
   parsePiPackageMutationResponse,
   parsePiPackagesResponse,
   parsePiWebConfigResponse,
@@ -398,7 +399,9 @@ export const pipelineApi = {
   /** Launch a pipeline run on a repo workspace (machine-local only). */
   pipelineRun: (repoPath: string, goal: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ repoPath, goal }) }),
   /** Query a pipeline run's live phase/status card. */
-  pipelineRunStatus: (runId: string) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/status`, parsePipelineRunStatus),
+  pipelineRunStatus: (runId: string) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/status`, parsePipelineRunStatus, { signal: AbortSignal.timeout(15000) }),
+  /** List known pipeline runs (run-list recovery for a fresh browser). */
+  pipelineRuns: () => request("api/pipeline-runs", parsePipelineRuns),
   /** Submit a sketch-card decision (approve/revise) to a pipeline run. */
   pipelineRunDecision: (runId: string, decision: "approve" | "revise") => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision }) }),
 } as const;

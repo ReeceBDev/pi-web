@@ -2,7 +2,7 @@ import { api as defaultApi, type Project, type Workspace } from "../api";
 import { resetWorkspaceScopedState, type AppState } from "../appState";
 import { BrowserErrorReporter, projectBrowserErrorScope, workspaceBrowserErrorScope } from "../browserErrors";
 import { mergeCachedNewSessions } from "../cachedNewSessions";
-import { mergePipelineRuns } from "../cachedPipelineRuns";
+import { mergePipelineRuns, recoverPipelineRuns } from "../cachedPipelineRuns";
 import { machineProjectKey } from "../machineKeys";
 import { selectedMachineId, type GetState, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection, type RouteTarget, type SetState, type UpdateUrl } from "./types";
 import type { SessionController } from "./sessionController";
@@ -13,7 +13,7 @@ const WORKSPACE_TOPOLOGY_REFRESH_DEBOUNCE_MS = 50;
 const WORKSPACE_SELECTION_SCOPE = ["machine", "project", "workspace", "session"] as const;
 
 export interface WorkspaceControllerDependencies {
-  api?: Pick<typeof defaultApi, "sessions" | "workspaces">;
+  api?: Pick<typeof defaultApi, "sessions" | "workspaces" | "pipelineRuns">;
   navigateToWorkspace?: (workspace: Workspace | undefined, options?: NavigationDestinationOptions) => Promise<boolean>;
   captureNavigation?: () => NavigationSelection;
   beginNavigationOperation?: (scope: readonly NavigationScope[]) => NavigationFreshness;
@@ -29,7 +29,7 @@ interface WorkspaceMutationGuard {
 type WorkspaceSelectionTarget = RouteTarget & WorkspaceMutationGuard;
 
 export class WorkspaceController {
-  private readonly api: Pick<typeof defaultApi, "sessions" | "workspaces">;
+  private readonly api: Pick<typeof defaultApi, "sessions" | "workspaces" | "pipelineRuns">;
   private readonly navigateToWorkspace: WorkspaceControllerDependencies["navigateToWorkspace"];
   private readonly captureNavigation: WorkspaceControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: WorkspaceControllerDependencies["beginNavigationOperation"];
@@ -141,6 +141,12 @@ export class WorkspaceController {
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedWorkspace?.id !== workspace.id
         || this.getState().selectedProject?.id !== workspace.projectId) return;
+      // Fresh browser / lost cache: recover this workspace's runs from the
+      // gateway's run list before the merge rebuilds the restored rows.
+      await recoverPipelineRuns(workspace.path, machineId, async () => {
+        const result = await this.api.pipelineRuns();
+        return result.ok ? result.runs : [];
+      });
       const sessions = mergePipelineRuns(workspace.path, mergeCachedNewSessions(workspace.path, loadedSessions, machineId), machineId);
       this.sessions.registerRestoredPipelineStarts(sessions, workspace, machineId);
       this.setState({

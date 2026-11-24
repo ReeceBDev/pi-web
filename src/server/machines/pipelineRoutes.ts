@@ -22,6 +22,7 @@ import type { FastifyInstance } from "fastify";
 export const DEFAULT_PIPELINE_START_RUN_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/start-run.js";
 export const DEFAULT_PIPELINE_STATUS_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/run-status.js";
 export const DEFAULT_PIPELINE_DECIDE_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/approve-run.js";
+export const DEFAULT_PIPELINE_LIST_SCRIPT = "/home/rbowen/.local/share/pipeline-releases/worker/1af8218fb6b7bdf21468bd5eb84afd10a6ccdbc6/dist/scripts/list-runs.js";
 const PIPELINE_ACTOR = "rbowen";
 const RUN_ID_RE = /^[A-Za-z0-9._:-]+$/;
 
@@ -48,18 +49,27 @@ export interface PipelineDecisionDelegate {
   decide(runId: string, decision: "approve" | "revise", actor: string): Promise<PipelineDecisionResult>;
 }
 
-/** Spawn delegate for the pipeline status/decision CLIs. Same trust domain as
- * ChildPipelineRunClient: this process spawns them, the browser never sees
- * Temporal. Success output of both CLIs is one JSON line; failure JSON lines
- * ({ok:false,...}) and non-JSON exits map to typed ok:false results. */
-export class ChildPipelineCommandClient implements PipelineStatusDelegate, PipelineDecisionDelegate {
+export interface PipelineRunListEntry { runId: string; goal: string; cwd?: string; created: string; status: string }
+export type PipelineListResult = { ok: true; runs: PipelineRunListEntry[] } | { ok: false; reason: string; detail: string };
+
+export interface PipelineListDelegate {
+  list(): Promise<PipelineListResult>;
+}
+
+/** Spawn delegate for the pipeline status/decision/list CLIs. Same trust
+ * domain as ChildPipelineRunClient: this process spawns them, the browser never
+ * sees Temporal. Success output of all CLIs is one JSON line; failure JSON
+ * lines ({ok:false,...}) and non-JSON exits map to typed ok:false results. */
+export class ChildPipelineCommandClient implements PipelineStatusDelegate, PipelineDecisionDelegate, PipelineListDelegate {
   private readonly statusScript: string;
   private readonly decideScript: string;
+  private readonly listScript: string;
   private readonly spawnImpl: SpawnLike;
 
-  constructor(options: { statusScript?: string; decideScript?: string; spawnImpl?: SpawnLike } = {}) {
+  constructor(options: { statusScript?: string; decideScript?: string; listScript?: string; spawnImpl?: SpawnLike } = {}) {
     this.statusScript = options.statusScript ?? process.env["PI_WEB_PIPELINE_STATUS"] ?? DEFAULT_PIPELINE_STATUS_SCRIPT;
     this.decideScript = options.decideScript ?? process.env["PI_WEB_PIPELINE_DECIDE"] ?? DEFAULT_PIPELINE_DECIDE_SCRIPT;
+    this.listScript = options.listScript ?? process.env["PI_WEB_PIPELINE_LIST"] ?? DEFAULT_PIPELINE_LIST_SCRIPT;
     this.spawnImpl = options.spawnImpl ?? ((command, args) => spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }));
   }
 
@@ -70,6 +80,10 @@ export class ChildPipelineCommandClient implements PipelineStatusDelegate, Pipel
   async decide(runId: string, decision: "approve" | "revise", actor: string): Promise<PipelineDecisionResult> {
     const receipt = parsedReceiptIsObject(await this.collectCli(this.spawnCli(this.decideScript, ["--run", runId, "--decision", decision, "--actor", actor])));
     return this.toResult(receipt.collected, () => (receipt.value === undefined ? undefined : { ok: true as const, receipt: receipt.value }));
+  }
+  async list(): Promise<PipelineListResult> {
+    return this.toResult(await this.collectCli(this.spawnCli(this.listScript, [])), (parsed) =>
+      parsed["ok"] === true && Array.isArray(parsed["runs"]) ? { ok: true as const, runs: parsed["runs"].flatMap(parseRunListEntry) } : undefined);
   }
 
   private spawnCli(script: string, args: string[]): ChildProcess {
@@ -175,7 +189,7 @@ export class ChildPipelineRunClient implements PipelineRunDelegate {
 export function registerPipelineRoutes(
   app: FastifyInstance,
   runner: PipelineRunDelegate = new ChildPipelineRunClient(),
-  commands: PipelineStatusDelegate & PipelineDecisionDelegate = new ChildPipelineCommandClient(),
+  commands: PipelineStatusDelegate & PipelineDecisionDelegate & PipelineListDelegate = new ChildPipelineCommandClient(),
 ): void {
   app.post("/api/pipeline-runs", async (request, reply) => {
     const body = parseRunBody(request.body);
@@ -185,6 +199,14 @@ export function registerPipelineRoutes(
     const sketches = [...(body.sketches ?? []), ...sketchesFromGoal(body.goal)];
     try {
       return await reply.code(200).send(await runner.run({ ...body, sketches }));
+    } catch (error) {
+      return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/pipeline-runs", async (_request, reply) => {
+    try {
+      return await reply.code(200).send(await commands.list());
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
     }
@@ -265,6 +287,19 @@ function parsedReceiptIsObject(collected: CollectedCliOutput): { collected: Coll
 
 function isPlainCliRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Row guard for the list CLI's runs array: malformed rows drop, cwd-less
+ * (memo-less) rows stay and let the client merge attribute them. */
+function parseRunListEntry(value: unknown): PipelineRunListEntry[] {
+  if (!isRecord(value)) return [];
+  const runId = value["runId"];
+  const goal = value["goal"];
+  const created = value["created"];
+  const status = value["status"];
+  const cwd = value["cwd"];
+  if (typeof runId !== "string" || runId === "" || typeof goal !== "string" || typeof created !== "string" || typeof status !== "string") return [];
+  return [{ runId, goal, created, status, ...(typeof cwd === "string" ? { cwd } : {}) }];
 }
 
 function parseLastJsonLine(text: string): Record<string, unknown> | undefined {

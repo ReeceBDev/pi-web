@@ -2171,6 +2171,32 @@ export function parsePipelineRunDecision(value: unknown): PipelineRunDecision {
   };
 }
 
+export interface PipelineRunListEntry { runId: string; goal: string; cwd?: string; created: string; status: string }
+
+export type PipelineRunList = { ok: true; runs: PipelineRunListEntry[] } | { ok: false; reason: string; detail: string };
+
+export function parsePipelineRuns(value: unknown): PipelineRunList {
+  if (!isRecord(value) || value["ok"] !== true || !Array.isArray(value["runs"])) {
+    return {
+      ok: false,
+      reason: isRecord(value) && typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
+      detail: isRecord(value) && typeof value["detail"] === "string" ? value["detail"] : "",
+    };
+  }
+  return { ok: true, runs: value["runs"].flatMap(parsePipelineRunListEntry) };
+}
+
+function parsePipelineRunListEntry(value: unknown): PipelineRunListEntry[] {
+  if (!isRecord(value)) return [];
+  const runId = value["runId"];
+  const goal = value["goal"];
+  const created = value["created"];
+  const status = value["status"];
+  const cwd = value["cwd"];
+  if (typeof runId !== "string" || runId === "" || typeof goal !== "string" || typeof created !== "string" || typeof status !== "string") return [];
+  return [{ runId, goal, created, status, ...(typeof cwd === "string" ? { cwd } : {}) }];
+}
+
 /** The optional Record-valued field of a response record, or undefined. */
 function optionalRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
   const value = record[key];

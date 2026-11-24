@@ -102,6 +102,7 @@ function harness(
       api: {
         workspaces: loadWorkspaces,
         sessions: options.loadSessions ?? vi.fn<(path: string, machineId?: string, options?: { signal?: AbortSignal }) => Promise<SessionInfo[]>>().mockResolvedValue([]),
+        pipelineRuns: vi.fn<() => Promise<{ ok: true; runs: never[] } | { ok: false; reason: string; detail: string }>>().mockResolvedValue({ ok: false, reason: "pipeline_runs_unmocked", detail: "" }),
       },
       ...(options.navigateToWorkspace === undefined ? {} : { navigateToWorkspace: options.navigateToWorkspace }),
       ...(options.beginNavigationOperation === undefined ? {} : { beginNavigationOperation: options.beginNavigationOperation }),

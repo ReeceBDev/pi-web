@@ -2,7 +2,7 @@ import { api as defaultApi, type AskUserCloseResponse, type AskUserSubmission, t
 import type { AppState, ClosedExtensionDialog } from "../appState";
 import { BrowserErrorReporter, sessionBrowserErrorScope, workspaceBrowserErrorScope, type SessionBrowserErrorOwner } from "../browserErrors";
 import { forgetCachedNewSession, isCachedNewSessionInfo, markCachedNewSessionInfo, mergeCachedNewSessions, rememberCachedNewSession, stripCachedNewSessionMarker } from "../cachedNewSessions";
-import { forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, rememberPipelineRun } from "../cachedPipelineRuns";
+import { forgetPipelineRun, isRestoredPipelineRunSession, mergePipelineRuns, recoverPipelineRuns, rememberPipelineRun } from "../cachedPipelineRuns";
 import { textMessage } from "../chatMessages";
 import type { ChatLine, ChatPart, PipelineDecisionCard } from "../components/shared";
 import { machineSessionKey } from "../machineKeys";
@@ -74,6 +74,9 @@ export interface SessionControllerDependencies {
   onModelScopeChanged?: (revision: number) => void;
   /** Pipeline run-status poll interval (ms). Tests speed it up. */
   pipelinePollMs?: number;
+  /** Per-poll watchdog (ms): a status call that outlives it must not pin the
+   * poller — the interval keeps firing so the run row stays live. */
+  pipelinePollTimeoutMs?: number;
 }
 
 function isUnitWorktreePath(path: string): boolean {
@@ -194,6 +197,7 @@ export class SessionController {
   private readonly beginNavigationOperation: SessionControllerDependencies["beginNavigationOperation"];
   private readonly browserErrors: BrowserErrorReporter;
   private readonly pipelinePollMs: number;
+  private readonly pipelinePollTimeoutMs: number;
   /** Live run-status pollers keyed by run id; stopped on close/discard/dispose. */
   private readonly pipelinePollers = new Map<string, ReturnType<typeof setInterval>>();
   private selectionSeq = 0;
@@ -239,6 +243,7 @@ export class SessionController {
     this.captureNavigation = deps.captureNavigation;
     this.beginNavigationOperation = deps.beginNavigationOperation;
     this.pipelinePollMs = deps.pipelinePollMs ?? 3000;
+    this.pipelinePollTimeoutMs = deps.pipelinePollTimeoutMs ?? 20000;
     this.browserErrors = new BrowserErrorReporter(getState, setState);
   }
 
@@ -725,7 +730,12 @@ export class SessionController {
       }
       if (inFlight) return; // status CLI can hang on a busy Temporal; skip the tick
       inFlight = true;
-      void this.pollPipelineRun(pending, runId).finally(() => { inFlight = false; });
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = new Promise<void>((resolve) => { deadline = setTimeout(resolve, this.pipelinePollTimeoutMs); });
+      void Promise.race([this.pollPipelineRun(pending, runId), timedOut]).catch(() => undefined).finally(() => {
+        clearTimeout(deadline);
+        inFlight = false;
+      });
     }, this.pipelinePollMs);
     this.pipelinePollers.set(runId, timer);
     void this.pollPipelineRun(pending, runId);
@@ -1237,6 +1247,12 @@ export class SessionController {
       // and then discarding the fetched list would lose not-yet-persisted
       // sessions once the stale catalog snapshot is reused without a refetch.
       if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
+      // Fresh browser / lost cache: recover this workspace's runs from the
+      // gateway's run list before the merge rebuilds the restored rows.
+      await recoverPipelineRuns(workspace.path, machineId, async () => {
+        const result = await this.api.pipelineRuns();
+        return result.ok ? result.runs : [];
+      });
       const listedSessions = mergePipelineRuns(workspace.path, mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
         .filter((session) => !this.isSuppressedCreatedSession(session, machineId)), machineId);
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
@@ -2026,6 +2042,11 @@ export class SessionController {
     // Re-selecting the row mid-startup re-establishes the constructing
     // session's subscription; the close above dropped it with the old selection.
     if (pendingStart?.backendSessionId !== undefined) this.connectPendingStartSocket(pendingStart);
+    // Self-heal: a restored/launched pipeline row whose poller died (closed run
+    // stopped it, a reload lost it) restarts polling on reselect — selecting
+    // the row must always leave its run card live. Idempotent: a running
+    // poller is left alone.
+    if (pendingStart?.pipeline === true && pendingStart.pipelineRunId !== undefined && !pendingStart.discarded) this.startPipelinePolling(pendingStart);
     if (options?.updateUrl !== false) this.updateUrl();
   }
 
