@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_ATTACHMENT_FOLDER, DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_UPLOADS_FOLDER, AGENT_SESSION_DIR_ENV_KEYS, agentSessionDirEnvOverride, askUserEnabled, detectDeprecatedAgentInputs, effectiveAgentConfig, environmentFactsEnabled, effectivePiWebConfig, loadPiWebConfig, maxUploadBytes, offlineModeEnabled, savePiWebConfig, spawnSessionsEnabled, subsessionsEnabled } from "./config.js";
+import { DEFAULT_ATTACHMENT_FOLDER, DEFAULT_BROWSER_MAX_AGE_HOURS, DEFAULT_EXTENSION_DIALOGS_TIMEOUT_MS, DEFAULT_MAX_UPLOAD_BYTES, DEFAULT_UPLOADS_FOLDER, AGENT_SESSION_DIR_ENV_KEYS, agentSessionDirEnvOverride, askUserEnabled, browserReaperMaxAgeMs, detectDeprecatedAgentInputs, effectiveAgentConfig, environmentFactsEnabled, effectivePiWebConfig, loadPiWebConfig, maxUploadBytes, offlineModeEnabled, savePiWebConfig, spawnSessionsEnabled, subsessionsEnabled } from "./config.js";
 
 let tempDir: string;
 let configPath: string;
@@ -285,6 +285,24 @@ describe("maxUploadBytes", () => {
 
   it("falls back to config when env is unset or invalid", () => {
     expect(maxUploadBytes({ PI_WEB_MAX_UPLOAD_BYTES: "not-a-number" }, { maxUploadBytes: 555 })).toBe(555);
+  });
+});
+
+describe("browserReaperMaxAgeMs", () => {
+  it("defaults to six hours when nothing is configured", () => {
+    expect(browserReaperMaxAgeMs({})).toBe(DEFAULT_BROWSER_MAX_AGE_HOURS * 60 * 60 * 1000);
+  });
+
+  it("honors an env override in hours, including fractions", () => {
+    expect(browserReaperMaxAgeMs({ PI_WEB_BROWSER_MAX_AGE_HOURS: "2" })).toBe(2 * 60 * 60 * 1000);
+    expect(browserReaperMaxAgeMs({ PI_WEB_BROWSER_MAX_AGE_HOURS: "0.5" })).toBe(30 * 60 * 1000);
+  });
+
+  it("falls back to the default when env is unset or invalid", () => {
+    expect(browserReaperMaxAgeMs({ PI_WEB_BROWSER_MAX_AGE_HOURS: "" })).toBe(DEFAULT_BROWSER_MAX_AGE_HOURS * 60 * 60 * 1000);
+    expect(browserReaperMaxAgeMs({ PI_WEB_BROWSER_MAX_AGE_HOURS: "not-a-number" })).toBe(DEFAULT_BROWSER_MAX_AGE_HOURS * 60 * 60 * 1000);
+    expect(browserReaperMaxAgeMs({ PI_WEB_BROWSER_MAX_AGE_HOURS: "0" })).toBe(DEFAULT_BROWSER_MAX_AGE_HOURS * 60 * 60 * 1000);
+    expect(browserReaperMaxAgeMs({ PI_WEB_BROWSER_MAX_AGE_HOURS: "-1" })).toBe(DEFAULT_BROWSER_MAX_AGE_HOURS * 60 * 60 * 1000);
   });
 });
 

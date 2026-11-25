@@ -149,6 +149,18 @@ export function maxUploadBytes(env: NodeJS.ProcessEnv = process.env, config: PiW
   return DEFAULT_MAX_UPLOAD_BYTES;
 }
 
+/** Orphaned Playwright browser mains older than this many hours are terminated by the session daemon's browser reaper. */
+export const DEFAULT_BROWSER_MAX_AGE_HOURS = 6;
+
+export function browserReaperMaxAgeMs(env: NodeJS.ProcessEnv = process.env): number {
+  const fromEnv = env["PI_WEB_BROWSER_MAX_AGE_HOURS"];
+  if (fromEnv !== undefined && fromEnv !== "") {
+    const parsed = Number(fromEnv);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed * 60 * 60 * 1000;
+  }
+  return DEFAULT_BROWSER_MAX_AGE_HOURS * 60 * 60 * 1000;
+}
+
 export function piWebDataDir(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): string {
   const configured = env["PI_WEB_DATA_DIR"];
   if (configured === undefined || configured === "") return defaultPiWebDataDir();

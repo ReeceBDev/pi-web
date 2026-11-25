@@ -23,6 +23,7 @@ import { registerAuthRoutes } from "./sessions/authRoutes.js";
 import { ModelCatalogRefresher } from "./sessions/modelCatalogRefresher.js";
 import { PiSessionService } from "./sessions/piSessionService.js";
 import { createPiSessionManagerGateway, defaultPiSessionsRoot } from "./sessions/piSessionManagerGateway.js";
+import { BrowserReaper } from "./sessions/browserReaper.js";
 import { SessionWorkspaceWarmer } from "./sessions/sessionWorkspaceWarmer.js";
 import { registerSessionRoutes } from "./sessions/sessionRoutes.js";
 import { SessionNotificationStore } from "./sessions/sessionNotificationStore.js";
@@ -45,7 +46,7 @@ import {
 } from "../server-plugin-api.js";
 import { getPiWebRuntimeComponent } from "./piWebStatus.js";
 import { SESSIOND_RUNTIME_CAPABILITIES } from "../shared/capabilities.js";
-import { agentSessionDirEnvOverride, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
+import { agentSessionDirEnvOverride, browserReaperMaxAgeMs, effectivePiWebConfig, maxUploadBytes, offlineModeEnabled, piWebDataDir, PI_CODING_AGENT_DIR_ENV, PI_CODING_AGENT_SESSION_DIR_ENV } from "../config.js";
 import { createFilePiWebConfigService } from "./configRoutes.js";
 import { createActiveAgentProfileDescriptor } from "../sessiond/activeAgentProfile.js";
 import { loadServerPluginRecoveryConfig } from "../serverPluginRecovery.js";
@@ -305,6 +306,11 @@ async function createSessionDaemonRuntime() {
       logger: app.log,
     });
     workspaceWarmer.start();
+    // Browsers for dead sessions outlive the session whenever its pipeline ends without runtime
+    // disposal, and the daemon then keeps them as direct children forever; the age-based reaper
+    // bounds such leaks without touching any live session's fresh browser.
+    const browserReaper = new BrowserReaper({ logger: app.log, maxAgeMs: browserReaperMaxAgeMs(daemonEnvironment) });
+    browserReaper.start();
     const projects = new ProjectService(new ProjectStore(projectStorePath(daemonEnvironment)));
     // Only dependency-ready providers can define the aggregate topology. The
     // runtime has already rejected any staged provider that depends on late
@@ -442,6 +448,7 @@ async function createSessionDaemonRuntime() {
           serverPlugins,
           catalogRefresher,
           workspaceWarmer,
+          browserReaper,
           auth,
           sessions,
           unreadStore,
