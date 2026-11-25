@@ -250,7 +250,7 @@ describe("buildApp pipeline status/decision routes", () => {
     expect(response.json()).toMatchObject({ ok: true, receipt: { accepted: true, decision: "approve" } });
     const argvOut = process.env["STUB_ARGV_OUT"];
     if (argvOut === undefined) throw new Error("stub argv output path not configured");
-    expect(JSON.parse(await readFile(argvOut, "utf8"))).toEqual(["--run", "run-42", "--decision", "approve", "--actor", "rbowen", "--card", JSON.stringify(binding)]);
+    expect(JSON.parse(await readFile(argvOut, "utf8"))).toEqual(["--run", "run-42", "--decision", "approve", "--actor", "rbowen", "--binding", JSON.stringify({ executionRunId: binding.rootExecutionId, cardExecutionRunId: binding.targetExecutionId, stage: binding.stage, questionId: binding.questionId, revision: binding.revision, artifactSha256: binding.artifactSha256 })]);
   });
 
   it("POST decision maps no-open-card to a typed failure", async () => {

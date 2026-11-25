@@ -4,7 +4,7 @@ import type { PipelineApprovalBinding, PipelineRevisionFeedback } from "../../..
 import type { PendingPipelineDecision } from "../cachedPipelineRuns";
 import type { PipelineDecisionCard, PipelineDeliveryView } from "./shared";
 
-export type PipelineDecideCallback = (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback) => void | Promise<void>;
+export type PipelineDecideCallback = (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding | undefined, feedback?: PipelineRevisionFeedback) => void | Promise<void>;
 
 /**
  * The pipeline run's live decision card in the run's chat: current phase, the
@@ -72,7 +72,7 @@ export class PipelineCard extends LitElement {
     const card = this.card;
     if (card === undefined) return this.closeStatus !== undefined || this.detail !== undefined ? html`` : html`<p class="idle">Waiting for the next pipeline action</p>`;
     const disabled = card.historical === true || card.decided === true || card.decisionPending === true || this.submitting !== undefined || this.stale ||
-      this.retry !== undefined || card.artifact === undefined || card.binding === undefined;
+      this.retry !== undefined || card.artifact === undefined;
     return html`
       <div class="question">
         <span class="q-label">${card.stage ?? "decision"} · ${card.questionId}</span>
@@ -103,7 +103,7 @@ export class PipelineCard extends LitElement {
   }
 
   private async decide(decision: "approve" | "revise", binding?: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<void> {
-    if (this.submitting !== undefined || this.card?.historical === true || !binding) return;
+    if (this.submitting !== undefined || this.card?.historical === true) return;
     this.submitting = decision;
     try {
       if (feedback) await this.onDecide?.(decision, this.runId, binding, feedback);

@@ -44,7 +44,7 @@ it("requires an identity and passes it from HTTP to CLI without replacing it on 
 });
 
 
-it("requires the reviewed card, pins status, and forwards the exact decision to the CLI", async () => {
+it("forwards the reviewed card as a workflow binding, and card-less bodies decide the current open card server-side", async () => {
   const execution = "01a1f777-e9fe-777d-b157-8cd6e797d35a";
   const card = { rootExecutionId: execution, targetExecutionId: execution, stage: "sketches",
     questionId: "sketch-approval", revision: 2, artifactSha256: "a".repeat(64) };
@@ -70,22 +70,27 @@ it("requires the reviewed card, pins status, and forwards the exact decision to 
   const app = Fastify();
   registerPipelineRoutes(app, { run: () => Promise.reject(new Error("offline: start forbidden")) }, commands);
   try {
-    const reject = await app.inject({ method: "POST", url: "/api/pipeline-runs/run-1/decision", payload: { decision: "approve" } });
-    expect(reject.statusCode).toBe(400);
-    expect(calls).toHaveLength(0);
+    const cardless = await app.inject({ method: "POST", url: "/api/pipeline-runs/run-1/decision", payload: { decision: "approve" } });
+    expect(cardless.json()).toEqual({ ok: true, receipt: { accepted: true } });
+    expect(calls[0]).toEqual(["/offline/decide.js", "--run", "run-1", "--decision", "approve", "--actor", "rbowen"]);
     const status = await app.inject({ method: "GET", url: "/api/pipeline-runs/run-1/status?execution=" + execution });
     expect(status.json()).toEqual({ ok: true, view: { ok: true, phase: "CLOSED", finalPhase: "BUILD", status: "blocked", executionRunId: execution } });
     const submit = await app.inject({ method: "POST", url: "/api/pipeline-runs/run-1/decision", payload: { decision: "approve", actor: "ignored", card } });
     expect(submit.json()).toEqual({ ok: true, receipt: { accepted: true } });
+    const badCard = await app.inject({ method: "POST", url: "/api/pipeline-runs/run-1/decision", payload: { decision: "approve", card: { stage: "sketches" } } });
+    expect(badCard.statusCode).toBe(400);
     const feedback = { reason: "The fourth example must remain valid.", acceptanceRef: "goal-5" };
     for (let attempt = 0; attempt < 2; attempt++) {
       const revise = await app.inject({ method: "POST", url: "/api/pipeline-runs/run-1/decision", payload: { decision: "revise", card, feedback } });
       expect(revise.json()).toEqual({ ok: true, receipt: { accepted: true } });
     }
-    expect(calls[2]).toEqual(calls[3]);
-    expect(calls[2]?.slice(-2)).toEqual(["--feedback", JSON.stringify(feedback)]);
-    expect(calls[0]).toEqual(["/offline/status.js", "--run", "run-1", "--execution", execution]);
-    expect(calls[1]).toEqual(["/offline/decide.js", "--run", "run-1", "--decision", "approve", "--actor", "rbowen", "--card", JSON.stringify(card)]);
+    expect(calls[3]).toEqual(calls[4]);
+    expect(calls[3]?.slice(-2)).toEqual(["--feedback", JSON.stringify(feedback)]);
+    expect(calls[0]).toEqual(["/offline/decide.js", "--run", "run-1", "--decision", "approve", "--actor", "rbowen"]);
+    expect(calls[1]).toEqual(["/offline/status.js", "--run", "run-1", "--execution", execution]);
+    const binding = JSON.stringify({ executionRunId: execution, cardExecutionRunId: execution, stage: "sketches",
+      questionId: "sketch-approval", revision: 2, artifactSha256: "a".repeat(64) });
+    expect(calls[2]).toEqual(["/offline/decide.js", "--run", "run-1", "--decision", "approve", "--actor", "rbowen", "--binding", binding]);
   } finally {
     await app.close();
   }

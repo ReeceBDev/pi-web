@@ -15,7 +15,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-async function mount(card?: PipelineDecisionCard, onDecide?: (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding) => void | Promise<void>): Promise<PipelineCard> {
+async function mount(card?: PipelineDecisionCard, onDecide?: (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding | undefined) => void | Promise<void>): Promise<PipelineCard> {
   const element = new PipelineCard();
   element.runId = "run-1";
   element.phase = "AWAITING_SKETCH_APPROVAL";

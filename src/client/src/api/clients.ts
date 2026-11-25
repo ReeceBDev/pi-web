@@ -426,8 +426,9 @@ export const pipelineApi = {
     const query = execution !== undefined ? "?" + new URLSearchParams({ execution }).toString() : "";
     return request(`api/pipeline-runs/${encodeURIComponent(runId)}/status${query}`, parsePipelineRunStatus, { signal: AbortSignal.timeout(12_000) });
   },
-  /** Submit a sketch-card decision (approve/revise) to a pipeline run. */
-  pipelineRunDecision: (runId: string, decision: "approve" | "revise", card: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision, card, ...(feedback ? { feedback } : {}) }), signal: AbortSignal.timeout(12_000) }),
+  /** Submit a sketch-card decision (approve/revise) to a pipeline run. card
+   * omitted decides the run's CURRENT open card server-side. */
+  pipelineRunDecision: (runId: string, decision: "approve" | "revise", card?: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision, ...(card === undefined ? {} : { card }), ...(feedback ? { feedback } : {}) }), signal: AbortSignal.timeout(12_000) }),
 } as const;
 
 export const api = {

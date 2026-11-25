@@ -10,7 +10,7 @@ const defaultMachineId = "local";
 
 
 export interface PendingPipelineDecision {
-  binding: PipelineApprovalBinding;
+  binding?: PipelineApprovalBinding;
   decision: "approve" | "revise";
   feedback?: PipelineRevisionFeedback;
 }

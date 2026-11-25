@@ -53,7 +53,9 @@ export interface PipelineStatusDelegate {
 }
 
 export interface PipelineDecisionDelegate {
-  decide(runId: string, decision: "approve" | "revise", actor: string, card: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<PipelineDecisionResult>;
+  /** card omitted (or undefined) decides the run's CURRENT open card server-side;
+   * the approve-run CLI binds it from the live runStatus query. */
+  decide(runId: string, decision: "approve" | "revise", actor: string, card?: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<PipelineDecisionResult>;
 }
 
 /** Spawn delegate for the pipeline status/decision CLIs. Same trust domain as
@@ -88,8 +90,19 @@ export class ChildPipelineCommandClient implements PipelineStatusDelegate, Pipel
       return { ok: true as const, view };
     });
   }
-  async decide(runId: string, decision: "approve" | "revise", actor: string, card: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<PipelineDecisionResult> {
-    const receipt = parsedReceiptIsObject(await this.collectCli(this.spawnCli(this.decideScript, ["--run", runId, "--decision", decision, "--actor", actor, "--card", JSON.stringify(card), ...(feedback ? ["--feedback", JSON.stringify(feedback)] : [])])));
+  async decide(runId: string, decision: "approve" | "revise", actor: string, card?: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<PipelineDecisionResult> {
+    // The approve-run CLI's flag is --binding and its binding keys are the
+    // workflow-side names (executionRunId/cardExecutionRunId), not the HTTP
+    // card identity (rootExecutionId/targetExecutionId) — map, don't forward.
+    const binding = card === undefined ? undefined : JSON.stringify({
+      executionRunId: card.rootExecutionId,
+      cardExecutionRunId: card.targetExecutionId,
+      stage: card.stage,
+      questionId: card.questionId,
+      revision: card.revision,
+      artifactSha256: card.artifactSha256,
+    });
+    const receipt = parsedReceiptIsObject(await this.collectCli(this.spawnCli(this.decideScript, ["--run", runId, "--decision", decision, "--actor", actor, ...(binding === undefined ? [] : ["--binding", binding]), ...(feedback ? ["--feedback", JSON.stringify(feedback)] : [])])));
     return this.toResult(receipt.collected, () => (receipt.value === undefined ? undefined : { ok: true as const, receipt: receipt.value }));
   }
 
@@ -304,8 +317,9 @@ export function registerPipelineRoutes(
     const body = isRecord(request.body) ? request.body : {};
     const decision = body["decision"];
     if (decision !== "approve" && decision !== "revise") return reply.code(400).send({ ok: false, reason: "invalid_input", detail: "body must be {decision: \"approve\"|\"revise\", actor?}" });
-    const card = readPipelineApproval(body["card"]);
-    if (!card) return reply.code(400).send({ ok: false, reason: "review_required", detail: "submit the identity of the card you reviewed" });
+    const submittedCard = body["card"];
+    const card = submittedCard === undefined ? undefined : readPipelineApproval(submittedCard);
+    if (submittedCard !== undefined && card === undefined) return reply.code(400).send({ ok: false, reason: "review_required", detail: "submit the identity of the card you reviewed" });
     try {
       const feedback = readPipelineFeedback(body["feedback"]);
       if (body["feedback"] !== undefined && (decision !== "revise" || !feedback)) return await reply.code(400).send({ ok: false, reason: "invalid-feedback", detail: "Enter a revision reason and an optional affected requirement." });
