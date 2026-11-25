@@ -1,3 +1,5 @@
+import { PassThrough } from "node:stream";
+import { PipelineStatusStreams } from "./pipelineStatusStreams.js";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
@@ -47,6 +49,7 @@ export type PipelineDecisionResult = { ok: true; receipt: Record<string, unknown
 
 export interface PipelineStatusDelegate {
   status(runId: string, execution?: string): Promise<PipelineStatusResult>;
+  watch?(runId: string, execution: string | undefined, listener: Parameters<PipelineStatusStreams["subscribe"]>[2]): () => void;
 }
 
 export interface PipelineDecisionDelegate {
@@ -58,6 +61,7 @@ export interface PipelineDecisionDelegate {
  * Temporal. Success output of both CLIs is one JSON line; failure JSON lines
  * ({ok:false,...}) and non-JSON exits map to typed ok:false results. */
 export class ChildPipelineCommandClient implements PipelineStatusDelegate, PipelineDecisionDelegate {
+  private readonly streams = new PipelineStatusStreams((runId, execution) => this.spawnCli(this.statusScript, ["--run", runId, ...(execution !== undefined ? ["--execution", execution] : []), "--watch"]));
   private readonly statusScript: string;
   private readonly decideScript: string;
   private readonly spawnImpl: SpawnLike;
@@ -66,6 +70,10 @@ export class ChildPipelineCommandClient implements PipelineStatusDelegate, Pipel
     this.statusScript = options.statusScript ?? process.env["PI_WEB_PIPELINE_STATUS"] ?? DEFAULT_PIPELINE_STATUS_SCRIPT;
     this.decideScript = options.decideScript ?? process.env["PI_WEB_PIPELINE_DECIDE"] ?? DEFAULT_PIPELINE_DECIDE_SCRIPT;
     this.spawnImpl = options.spawnImpl ?? ((command, args) => spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }));
+  }
+
+  watch(runId: string, execution: string | undefined, listener: Parameters<PipelineStatusStreams["subscribe"]>[2]): () => void {
+    return this.streams.subscribe(runId, execution, listener);
   }
 
   async status(runId: string, execution?: string): Promise<PipelineStatusResult> {
@@ -260,6 +268,34 @@ export function registerPipelineRoutes(
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
     }
+  });
+
+  app.get<{ Params: { runId: string }; Querystring: { execution?: string } }>("/api/pipeline-runs/:runId/events", (request, reply) => {
+    const { runId } = request.params;
+    if (!RUN_ID_RE.test(runId)) return reply.code(400).send({ ok: false, reason: "invalid_input" });
+    const execution = request.query.execution;
+    if (execution !== undefined && !isPipelineExecutionId(execution)) return reply.code(400).send({ ok: false, reason: "invalid_execution" });
+    if (!commands.watch) return reply.code(503).send({ ok: false, reason: "pipeline_stream_unavailable" });
+    const output = new PassThrough();
+    output.write(": connected\n\n");
+    const heartbeat = setInterval(() => {
+      if (!output.write(": keepalive\n\n")) output.destroy();
+    }, 25000);
+    heartbeat.unref();
+    const off = commands.watch(runId, execution, {
+      view: (view) => {
+        if (!output.write("data: " + JSON.stringify(view) + "\n\n")) output.destroy();
+      },
+      end: () => output.end(),
+    });
+    const dispose = () => { clearInterval(heartbeat); off(); };
+    reply.raw.once("close", dispose);
+    output.once("close", dispose);
+    return reply
+      .header("Content-Type", "text/event-stream")
+      .header("Cache-Control", "no-cache, no-transform")
+      .header("X-Accel-Buffering", "no")
+      .send(output);
   });
 
   app.post<{ Params: { runId: string } }>("/api/pipeline-runs/:runId/decision", async (request, reply) => {

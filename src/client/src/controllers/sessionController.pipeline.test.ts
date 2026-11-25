@@ -380,7 +380,12 @@ describe("SessionController pipeline launches (+ New Work)", () => {
         card: module ? { ...openView.card, stage: "modules", revision: 2, questionId: "module-split", artifact: "Two modules" } : openView.card } }),
     };
     const state = () => ({ ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] });
-    const first = makeController(api, state(), { pipelinePollMs: 8 });
+    let push: (() => void) | undefined;
+    const first = makeController({ ...api, pipelineRunEvents: (run, pinned, receive) => {
+      push = () => { void api.pipelineRunStatus(run, pinned).then(receive); };
+      push();
+      return () => { push = undefined; };
+    } }, state());
     const second = makeController({ ...api, pipelineRunStatus: () => Promise.reject(new Error("status offline")) }, state());
     try {
       await first.controller.startSession({ pipeline: true });
@@ -388,6 +393,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       await vi.waitFor(() => { expect(first.state.messages.some(row => row.parts[0]?.type === "pipelineCard")).toBe(true); });
       await first.controller.send("status");
       module = true;
+      push?.();
       await vi.waitFor(() => { expect(first.state.messages.filter(row => row.parts[0]?.type === "pipelineCard")).toHaveLength(2); });
       const saved = first.state.messages.map(row => [row.pipelineId, row.meta?.timestamp]);
       expect(saved.every(([id, time]) => typeof id === "string" && typeof time === "string")).toBe(true);
@@ -459,7 +465,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     } finally { harness.controller.dispose(); }
   });
 
-  it("renders the live decision card from the status poll and approves from the card, not typed text", async () => {
+  it("renders the live decision card from the status response and approves from the card, not typed text", async () => {
     const decisions: [string, string][] = [];
     const api: typeof defaultApi = {
       ...defaultApi,
@@ -473,7 +479,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
         return Promise.resolve({ ok: true, receipt: { accepted: true, decision, decisionId: "dec-approve-1-x" } });
       },
     };
-    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
     try {
       await harness.controller.startSession({ pipeline: true });
       await flush();
@@ -554,16 +560,16 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       { phase: "MODULE_DESIGN" },
       { phase: "CLOSED", closeStatus: "COMPLETED" },
     ];
-    const statusCalls: string[] = [];
+    let closed = false;
     const api: typeof defaultApi = {
       ...defaultApi,
       pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-11" }),
-      pipelineRunStatus: (runId) => {
-        statusCalls.push(runId);
-        return Promise.resolve({ ok: true, view: views[Math.min(statusCalls.length - 1, views.length - 1)] ?? {} });
+      pipelineRunEvents: (_run, _execution, receive) => {
+        queueMicrotask(() => { for (const view of views) receive({ ok: true, view }); });
+        return () => { closed = true; };
       },
     };
-    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
     try {
       await harness.controller.startSession({ pipeline: true });
       await harness.controller.send("Build the flinger fix");
@@ -573,9 +579,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       const texts = harness.state.messages.map((line) => line.parts[0]?.type === "text" ? line.parts[0].text : "");
       expect(texts).toContain("Pipeline phase · MODULE_DESIGN");
       expect(texts).toContain("Pipeline run closed · COMPLETED");
-      const callsAfterClose = statusCalls.length;
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(statusCalls.length).toBe(callsAfterClose); // poller stopped on CLOSED
+      expect(closed).toBe(true);
     } finally {
       harness.controller.dispose();
     }
