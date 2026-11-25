@@ -1,10 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { FastifyInstance } from "fastify";
+import { PassThrough } from "node:stream";
+import { PipelineStatusStreams } from "./pipelineStatusStreams.js";
 
 /**
  * Machine-local route for launching an owner-approved pipeline run ("+ New
@@ -23,12 +26,14 @@ export const DEFAULT_PIPELINE_START_RUN_SCRIPT = "/home/rbowen/pi/pipeline/dist/
 export const DEFAULT_PIPELINE_STATUS_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/run-status.js";
 export const DEFAULT_PIPELINE_DECIDE_SCRIPT = "/home/rbowen/pi/pipeline/dist/scripts/approve-run.js";
 const PIPELINE_ACTOR = "rbowen";
+const REQUEST_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const RUN_ID_RE = /^[A-Za-z0-9._:-]+$/;
 
 export interface PipelineRunRequest {
   repoPath: string;
   goal: string;
   sketches?: string[];
+  requestId?: string;
 }
 
 export type PipelineRunResult = { ok: true; projectRunId: string } | { ok: false; reason: string; detail: string };
@@ -42,10 +47,11 @@ export type PipelineDecisionResult = { ok: true; receipt: Record<string, unknown
 
 export interface PipelineStatusDelegate {
   status(runId: string): Promise<PipelineStatusResult>;
+  watch?(runId: string, listener: { view: (view: Record<string, unknown>) => void; end: () => void }): () => void;
 }
 
 export interface PipelineDecisionDelegate {
-  decide(runId: string, decision: "approve" | "revise", actor: string): Promise<PipelineDecisionResult>;
+  decide(runId: string, decision: "approve" | "revise", actor: string, binding?: Record<string, unknown>): Promise<PipelineDecisionResult>;
 }
 
 /** Spawn delegate for the pipeline status/decision CLIs. Same trust domain as
@@ -55,6 +61,7 @@ export interface PipelineDecisionDelegate {
 export class ChildPipelineCommandClient implements PipelineStatusDelegate, PipelineDecisionDelegate {
   private readonly statusScript: string;
   private readonly decideScript: string;
+  private readonly streams = new PipelineStatusStreams((runId) => this.spawnCli(this.statusScript, ["--run", runId, "--watch"]));
   private readonly spawnImpl: SpawnLike;
 
   constructor(options: { statusScript?: string; decideScript?: string; spawnImpl?: SpawnLike } = {}) {
@@ -63,12 +70,16 @@ export class ChildPipelineCommandClient implements PipelineStatusDelegate, Pipel
     this.spawnImpl = options.spawnImpl ?? ((command, args) => spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }));
   }
 
+  watch(runId: string, listener: Parameters<PipelineStatusStreams["subscribe"]>[1]): () => void {
+    return this.streams.subscribe(runId, listener);
+  }
+
   async status(runId: string): Promise<PipelineStatusResult> {
-    return this.toResult(await this.collectCli(this.spawnCli(this.statusScript, ["--run", runId])), (parsed) =>
+    return this.toResult(await this.collectCli(this.spawnCli(this.statusScript, ["--run", runId]), 20000), (parsed) =>
       parsed["ok"] === true ? { ok: true as const, view: parsed } : undefined);
   }
-  async decide(runId: string, decision: "approve" | "revise", actor: string): Promise<PipelineDecisionResult> {
-    const receipt = parsedReceiptIsObject(await this.collectCli(this.spawnCli(this.decideScript, ["--run", runId, "--decision", decision, "--actor", actor])));
+  async decide(runId: string, decision: "approve" | "revise", actor: string, binding?: Record<string, unknown>): Promise<PipelineDecisionResult> {
+    const receipt = parsedReceiptIsObject(await this.collectCli(this.spawnCli(this.decideScript, ["--run", runId, "--decision", decision, "--actor", actor, ...(binding ? ["--binding", JSON.stringify(binding)] : [])])));
     return this.toResult(receipt.collected, () => (receipt.value === undefined ? undefined : { ok: true as const, receipt: receipt.value }));
   }
 
@@ -76,14 +87,22 @@ export class ChildPipelineCommandClient implements PipelineStatusDelegate, Pipel
     return this.spawnImpl(process.execPath, [script, ...args]);
   }
 
-  private async collectCli(child: ChildProcess): Promise<CollectedCliOutput> {
+  private async collectCli(child: ChildProcess, timeoutMs?: number): Promise<CollectedCliOutput> {
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const code = await new Promise<number | null>((resolve, reject) => {
       child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
       child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-      child.on("error", reject);
-      child.on("close", resolve);
+      const deadline = timeoutMs === undefined ? undefined : setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+      deadline?.unref();
+      child.once("error", (error) => {
+        clearTimeout(deadline);
+        reject(error);
+      });
+      child.once("close", (exitCode) => {
+        clearTimeout(deadline);
+        resolve(exitCode);
+      });
     });
     const stdoutText = Buffer.concat(stdout).toString("utf8");
     const stderrText = Buffer.concat(stderr).toString("utf8");
@@ -132,6 +151,7 @@ export class ChildPipelineRunClient implements PipelineRunDelegate {
       const args = [
         this.scriptPath,
         "--repo", request.repoPath,
+        "--request-id", request.requestId ?? randomUUID(),
         "--goal-file", goalFile,
         ...(request.sketches ?? []).flatMap((sketch) => ["--sketch", sketch]),
         "--actor", PIPELINE_ACTOR,
@@ -200,6 +220,32 @@ export function registerPipelineRoutes(
     }
   });
 
+  app.get<{ Params: { runId: string } }>("/api/pipeline-runs/:runId/events", (request, reply) => {
+    const { runId } = request.params;
+    if (!RUN_ID_RE.test(runId)) return reply.code(400).send({ ok: false, reason: "invalid_input" });
+    if (!commands.watch) return reply.code(503).send({ ok: false, reason: "pipeline_stream_unavailable" });
+    const output = new PassThrough();
+    output.write(": connected\n\n");
+    const heartbeat = setInterval(() => {
+      if (!output.write(": keepalive\n\n")) output.destroy();
+    }, 25000);
+    heartbeat.unref();
+    const off = commands.watch(runId, {
+      view: (view) => {
+        if (!output.write("data: " + JSON.stringify(view) + "\n\n")) output.destroy();
+      },
+      end: () => output.end(),
+    });
+    const dispose = () => { clearInterval(heartbeat); off(); };
+    reply.raw.once("close", dispose);
+    output.once("close", dispose);
+    return reply
+      .header("Content-Type", "text/event-stream")
+      .header("Cache-Control", "no-cache, no-transform")
+      .header("X-Accel-Buffering", "no")
+      .send(output);
+  });
+
   app.post<{ Params: { runId: string } }>("/api/pipeline-runs/:runId/decision", async (request, reply) => {
     const { runId } = request.params;
     if (!RUN_ID_RE.test(runId)) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: "runId must match [A-Za-z0-9._:-]+" });
@@ -208,7 +254,14 @@ export function registerPipelineRoutes(
     if (decision !== "approve" && decision !== "revise") return reply.code(400).send({ ok: false, reason: "invalid_input", detail: "body must be {decision: \"approve\"|\"revise\", actor?}" });
     const actor = typeof body["actor"] === "string" && body["actor"].trim() !== "" ? body["actor"].trim() : PIPELINE_ACTOR;
     try {
-      return await reply.code(200).send(await commands.decide(runId, decision, actor));
+      const binding = body["binding"];
+      if (binding !== undefined && !isRecord(binding)) {
+        return await reply.code(400).send({ ok: false, reason: "invalid_card" });
+      }
+      const result = binding === undefined
+        ? await commands.decide(runId, decision, actor)
+        : await commands.decide(runId, decision, actor, binding);
+      return await reply.code(200).send(result);
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
     }
@@ -220,7 +273,10 @@ function parseRunBody(value: unknown): PipelineRunRequest | undefined {
   if (typeof value["repoPath"] !== "string" || typeof value["goal"] !== "string") return undefined;
   const sketches = value["sketches"];
   if (sketches !== undefined && !isStringArray(sketches)) return undefined;
-  return { repoPath: value["repoPath"], goal: value["goal"], ...(sketches === undefined ? {} : { sketches }) };
+  const requestId = value["requestId"];
+  if (requestId !== undefined && (typeof requestId !== "string" || !REQUEST_ID.test(requestId))) return undefined;
+  return { repoPath: value["repoPath"], goal: value["goal"], ...(sketches === undefined ? {} : { sketches }),
+    ...(typeof requestId === "string" ? { requestId } : {}) };
 }
 
 function isStringArray(value: unknown): value is string[] {

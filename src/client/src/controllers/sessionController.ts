@@ -72,8 +72,6 @@ export interface SessionControllerDependencies {
   replacePromptEditorText?: (replacement: PromptEditorTextReplacement) => void | Promise<void>;
   onSelectedSessionReady?: (selection: SelectedSessionReady) => void;
   onModelScopeChanged?: (revision: number) => void;
-  /** Pipeline run-status poll interval (ms). Tests speed it up. */
-  pipelinePollMs?: number;
 }
 
 function isUnitWorktreePath(path: string): boolean {
@@ -122,6 +120,7 @@ interface PendingSessionStart {
   /** Set while a pipeline run launch request is in flight (or succeeded, so
    * later sends only queue); reset on failure so the next send retries. */
   pipelineLaunchAttempted?: boolean;
+  pipelineSubmission?: { goal: string; id: string };
   /** The launched pipeline run's id, learned from the launch ack; the target
    * for the status / approve / revise chat commands. */
   pipelineRunId?: string;
@@ -193,9 +192,7 @@ export class SessionController {
   private readonly captureNavigation: SessionControllerDependencies["captureNavigation"];
   private readonly beginNavigationOperation: SessionControllerDependencies["beginNavigationOperation"];
   private readonly browserErrors: BrowserErrorReporter;
-  private readonly pipelinePollMs: number;
-  /** Live run-status pollers keyed by run id; stopped on close/discard/dispose. */
-  private readonly pipelinePollers = new Map<string, ReturnType<typeof setInterval>>();
+  private pipelineStream?: { runId: string; close: () => void };
   private selectionSeq = 0;
   private disposed = false;
   // Join-time stream watermark for the selected session. `seq` is the
@@ -238,7 +235,6 @@ export class SessionController {
     this.onModelScopeChanged = deps.onModelScopeChanged;
     this.captureNavigation = deps.captureNavigation;
     this.beginNavigationOperation = deps.beginNavigationOperation;
-    this.pipelinePollMs = deps.pipelinePollMs ?? 3000;
     this.browserErrors = new BrowserErrorReporter(getState, setState);
   }
 
@@ -253,13 +249,14 @@ export class SessionController {
 
   dispose() {
     this.disposed = true;
-    for (const runId of [...this.pipelinePollers.keys()]) this.stopPipelinePolling(runId);
+    this.stopPipelineStream();
     this.selectionSeq += 1;
     this.socket.close();
     this.clearPendingUpdates();
   }
 
   clearActiveSession() {
+    this.stopPipelineStream();
     this.selectionSeq += 1;
     this.socket.close();
     this.notifications?.clearSelectedSession();
@@ -423,6 +420,7 @@ export class SessionController {
     const errorOwner = this.captureSessionErrorOwner(session);
     this.sessionSelection.rememberSession({ ...session, cwd: this.workspaceSelectionKey(session.cwd) });
     const seq = ++this.selectionSeq;
+    this.stopPipelineStream();
     this.socket.close();
     this.streamWatermark = undefined;
     this.clearPendingUpdates();
@@ -631,7 +629,14 @@ export class SessionController {
     let launched = false;
     let line: ChatLine;
     try {
-      const result = await this.api.pipelineRun(pending.cwd, text);
+      if (pending.pipelineSubmission?.goal !== text) {
+        const id = pending.tempId.replace(/^creating:/, "").replace(
+          /^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/,
+          "$1-$2-$3-$4-$5",
+        );
+        pending.pipelineSubmission = { goal: text, id: pending.pipelineSubmission ? crypto.randomUUID() : id };
+      }
+      const result = await this.api.pipelineRun(pending.cwd, text, pending.pipelineSubmission.id);
       launched = result.ok;
       if (result.ok) {
         pending.pipelineRunId = result.projectRunId;
@@ -649,7 +654,7 @@ export class SessionController {
     this.dropNextQueuedSessionMessage(pending.tempId);
     if (launched) {
       this.showPipelineRunActivity(pending);
-      this.startPipelinePolling(pending);
+      this.startPipelineStream(pending);
     }
     this.appendPipelineLines(pending, [line]);
   }
@@ -690,6 +695,7 @@ export class SessionController {
     } else if (command === "status") {
       try {
         const result = await this.api.pipelineRunStatus(runId);
+        if (result.ok) this.applyPipelineStatus(pending, runId, result.view);
         line = result.ok
           ? textMessage("system", `Pipeline status · ${runId} · ${pipelineStatusSummary(result.view)}`)
           : textMessage("system", `Pipeline status failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
@@ -698,7 +704,10 @@ export class SessionController {
       }
     } else {
       try {
-        const result = await this.api.pipelineRunDecision(runId, command);
+        const binding = pipelineApprovalBinding(pending.pipelineLastView);
+        const result = binding === undefined
+          ? await this.api.pipelineRunDecision(runId, command)
+          : await this.api.pipelineRunDecision(runId, command, binding);
         line = result.ok
           ? textMessage("system", `Pipeline decision accepted · ${pipelineDecisionSummary(result.receipt)}`)
           : textMessage("system", `Pipeline decision failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`);
@@ -709,63 +718,51 @@ export class SessionController {
     this.appendPipelineLines(pending, [line]);
   }
 
-  /** Poll a launched run's status: the latest view renders as the row's
-   * decision card (artifact visible, Approve/Revise buttons), phase
-   * transitions append notes, a closed run appends its close status and stops
-   * the poller. Drives the run from the UI — typed status/approve/revise
-   * commands stay as a fallback, never a requirement. */
-  private startPipelinePolling(pending: PendingSessionStart): void {
+  private stopPipelineStream(): void {
+    this.pipelineStream?.close();
+    delete this.pipelineStream;
+  }
+
+  private startPipelineStream(pending: PendingSessionStart): void {
     const runId = pending.pipelineRunId;
-    if (runId === undefined || this.pipelinePollers.has(runId) || this.disposed) return;
-    let inFlight = false;
-    const timer = setInterval(() => {
-      if (pending.discarded || this.disposed) {
-        this.stopPipelinePolling(runId);
-        return;
-      }
-      if (inFlight) return; // status CLI can hang on a busy Temporal; skip the tick
-      inFlight = true;
-      void this.pollPipelineRun(pending, runId).finally(() => { inFlight = false; });
-    }, this.pipelinePollMs);
-    this.pipelinePollers.set(runId, timer);
-    void this.pollPipelineRun(pending, runId);
-  }
-
-  private stopPipelinePolling(runId: string): void {
-    const timer = this.pipelinePollers.get(runId);
-    if (timer !== undefined) {
-      clearInterval(timer);
-      this.pipelinePollers.delete(runId);
-    }
-  }
-
-  private async pollPipelineRun(pending: PendingSessionStart, runId: string): Promise<void> {
-    let view: Record<string, unknown>;
-    try {
-      const result = await this.api.pipelineRunStatus(runId);
-      if (!result.ok) {
-        // A deleted workflow reports RUN_STATUS_FAILED with "workflow not
-        // found" in the detail — retrying can never succeed, so stop instead
-        // of polling a ghost run forever. Any other failure stays transient:
-        // keep polling silently.
-        if (result.reason === "RUN_STATUS_FAILED" && /workflow not found/i.test(result.detail)) {
-          this.stopPipelinePolling(runId);
-          if (pending.pipelineLastPhase !== "NOT_FOUND") {
-            pending.pipelineLastPhase = "NOT_FOUND";
-            this.appendPipelineLines(pending, [textMessage("system", "Pipeline run not found · status polling stopped")]);
-          }
+    if (runId === undefined || pending.discarded || this.disposed ||
+        this.getState().selectedSession?.id !== pending.tempId || this.pipelineStream?.runId === runId) return;
+    this.stopPipelineStream();
+    const selection = this.selectionSeq;
+    let disconnected = false;
+    const current = () => !this.disposed && !pending.discarded && this.selectionSeq === selection;
+    const apply = (result: Awaited<ReturnType<typeof defaultApi.pipelineRunStatus>>) => {
+      if (!current()) return;
+      if (result.ok) {
+        disconnected = false;
+        this.applyPipelineStatus(pending, runId, result.view);
+      } else if (result.reason === "WORKFLOW_NOT_FOUND" ||
+                 (result.reason === "RUN_STATUS_FAILED" && /workflow not found/i.test(result.detail))) {
+        this.stopPipelineStream();
+        if (pending.pipelineLastPhase !== "NOT_FOUND") {
+          pending.pipelineLastPhase = "NOT_FOUND";
+          this.appendPipelineLines(pending, [textMessage("system", "Pipeline run not found")]);
         }
-        return;
       }
-      view = result.view;
-    } catch {
-      return;
-    }
+    };
+    const close = this.api.pipelineRunEvents(runId, apply, () => {
+      if (!current() || disconnected) return;
+      disconnected = true;
+      this.appendPipelineLines(pending, [textMessage("system", "Pipeline status connection interrupted · reconnecting")]);
+    });
+    if (close !== undefined) this.pipelineStream = { runId, close };
+    else void this.api.pipelineRunStatus(runId).then(apply, () => { /* The explicit status command remains available. */ });
+  }
+
+  private applyPipelineStatus(pending: PendingSessionStart, runId: string, view: Record<string, unknown>): void {
     if (pending.discarded) return;
+    const previousView = pending.pipelineLastView;
+    if (previousView !== undefined && JSON.stringify(previousView) === JSON.stringify(view)) return;
+    if (pending.pipelineLastPhase === "CLOSED" && previousView?.["executionRunId"] === view["executionRunId"] && view["phase"] !== "CLOSED") return;
     pending.pipelineLastView = view;
     const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
     if (phase === "CLOSED") {
-      this.stopPipelinePolling(runId);
+      this.stopPipelineStream();
       if (pending.pipelineLastPhase !== "CLOSED") {
         pending.pipelineLastPhase = "CLOSED";
         const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : "unknown";
@@ -786,9 +783,16 @@ export class SessionController {
     const phase = typeof view["phase"] === "string" ? view["phase"] : "UNKNOWN";
     const closeStatus = typeof view["closeStatus"] === "string" ? view["closeStatus"] : undefined;
     const card = pipelineCardOf(pending, view);
-    const part: ChatPart = { type: "pipelineCard", runId, phase, ...(closeStatus === undefined ? {} : { closeStatus }), ...(card === undefined ? {} : { card }) };
+    const part: ChatPart = { type: "pipelineCard", runId, phase, ...(closeStatus === undefined ? {} : { closeStatus }), ...(card === undefined ? {} : { card }), ...(typeof view["detail"] === "string" ? { detail: view["detail"] } : {}) };
     const line = pending.pipelineCard;
-    if (line !== undefined && pending.pipelineLines?.includes(line) === true) {
+    const oldPart = line?.parts[0];
+    const oldCard = oldPart?.type === "pipelineCard" ? oldPart.card : undefined;
+    const sameCard = oldCard?.questionId === card?.questionId && oldCard?.revision === card?.revision &&
+      oldCard?.artifactSha256 === card?.artifactSha256;
+    if (line && oldPart?.type === "pipelineCard" && oldCard && !sameCard) {
+      line.parts = [{ ...oldPart, card: { ...oldCard, superseded: true } }];
+    }
+    if (line !== undefined && (oldCard === undefined || sameCard) && pending.pipelineLines?.includes(line) === true) {
       line.parts = [part];
     } else {
       const fresh: ChatLine = { role: "system", parts: [part] };
@@ -809,13 +813,16 @@ export class SessionController {
     if (pending === undefined || runId === undefined || cardPart?.type !== "pipelineCard" || cardPart.card === undefined) return;
     const card = cardPart.card;
     const key = `${card.questionId}@${String(card.revision)}`;
-    if (card.decided === true || card.decisionPending === true || (pending.pipelineDecidedKeys ?? []).includes(key)) return;
+    if (card.decided === true || card.superseded === true || card.decisionPending === true || (pending.pipelineDecidedKeys ?? []).includes(key)) return;
     pending.pipelineDecideInFlight = key;
     const view = pending.pipelineLastView;
     if (view !== undefined) this.updatePipelineCardLine(pending, runId, view);
     try {
-      const result = await this.api.pipelineRunDecision(runId, decision);
-      if (result.ok) pending.pipelineDecidedKeys = [...(pending.pipelineDecidedKeys ?? []), key];
+      const binding = pipelineApprovalBinding(view);
+      const result = binding === undefined
+        ? await this.api.pipelineRunDecision(runId, decision)
+        : await this.api.pipelineRunDecision(runId, decision, binding);
+      if (result.ok && result.receipt["accepted"] === true) pending.pipelineDecidedKeys = [...(pending.pipelineDecidedKeys ?? []), key];
       this.appendPipelineLines(pending, [result.ok
         ? textMessage("system", `Pipeline decision accepted · ${pipelineDecisionSummary(result.receipt)}`)
         : textMessage("system", `Pipeline decision failed · ${result.reason}${result.detail === "" ? "" : ` · ${result.detail}`}`)]);
@@ -1972,7 +1979,6 @@ export class SessionController {
     };
     this.pendingSessionStarts.set(session.id, pending);
     this.showPipelineRunActivity(pending);
-    this.startPipelinePolling(pending);
   }
 
   private insertAndSelectPendingSession(session: ClientPendingStartSessionInfo, options?: { updateUrl?: boolean | undefined }): void {
@@ -1988,6 +1994,7 @@ export class SessionController {
   private selectClientPendingStartSession(session: ClientPendingStartSessionInfo, options?: { updateUrl?: boolean | undefined; activity?: SessionActivity | undefined; sessions?: SessionInfo[] | undefined }): void {
     this.sessionSelection.rememberSession({ ...session, cwd: this.workspaceSelectionKey(session.cwd) });
     this.selectionSeq += 1;
+    this.stopPipelineStream();
     this.socket.close();
     this.notifications?.clearSelectedSession();
     this.streamWatermark = undefined;
@@ -2022,6 +2029,7 @@ export class SessionController {
     // Re-selecting the row mid-startup re-establishes the constructing
     // session's subscription; the close above dropped it with the old selection.
     if (pendingStart?.backendSessionId !== undefined) this.connectPendingStartSocket(pendingStart);
+    if (pendingStart?.pipelineRunId !== undefined) this.startPipelineStream(pendingStart);
     if (options?.updateUrl !== false) this.updateUrl();
   }
 
@@ -2166,7 +2174,10 @@ export class SessionController {
     // failed row could never be answered) and drop the early-subscribed socket
     // so it stops reconnecting against a session that may not exist.
     pending.discarded = true;
-    if (this.getState().selectedSession?.id === tempId) this.socket.close();
+    if (this.getState().selectedSession?.id === tempId) {
+      this.stopPipelineStream();
+      this.socket.close();
+    }
     const releasedCreatedSessions = this.takeSuppressedCreatedSessionsFor(pending.cwd, pending.machineId);
     const isCurrentPendingStart = this.isCurrentPendingStart(pending);
     if (wasDiscarded) {
@@ -2924,6 +2935,20 @@ function pipelineCardOf(pending: PendingSessionStart, view: Record<string, unkno
     ...(typeof artifact === "string" ? { artifact } : {}),
     decided: (pending.pipelineDecidedKeys ?? []).includes(key),
     decisionPending: pending.pipelineDecideInFlight === key,
+  };
+}
+
+function pipelineApprovalBinding(view: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (typeof view?.["executionRunId"] !== "string") return undefined;
+  const card = optionalPipelineRecord(view, "card");
+  if (!card) return undefined;
+  return {
+    executionRunId: view["executionRunId"],
+    cardExecutionRunId: card["executionRunId"],
+    stage: card["stage"] === "modules" ? "modules" : "sketches",
+    revision: card["revision"],
+    questionId: card["questionId"],
+    artifactSha256: card["artifactSha256"],
   };
 }
 

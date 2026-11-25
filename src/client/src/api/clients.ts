@@ -396,11 +396,27 @@ export const supervisorApi = {
 
 export const pipelineApi = {
   /** Launch a pipeline run on a repo workspace (machine-local only). */
-  pipelineRun: (repoPath: string, goal: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ repoPath, goal }) }),
+  pipelineRun: (repoPath: string, goal: string, requestId?: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ repoPath, goal, requestId }) }),
+  pipelineRunEvents: (runId: string, onStatus: (result: ReturnType<typeof parsePipelineRunStatus>) => void, onDisconnect: () => void) => {
+    if (typeof EventSource === "undefined") return undefined;
+    const source = new EventSource(resolveAppUrl("api/pipeline-runs/" + encodeURIComponent(runId) + "/events"));
+    source.onmessage = (event: MessageEvent<string>) => {
+      try {
+        const view: unknown = JSON.parse(event.data);
+        if (typeof view === "object" && view !== null && "ok" in view && view.ok === true) {
+          onStatus(parsePipelineRunStatus({ ok: true, view }));
+        } else {
+          onStatus(parsePipelineRunStatus(view));
+        }
+      } catch { onDisconnect(); }
+    };
+    source.onerror = onDisconnect;
+    return () => { source.close(); };
+  },
   /** Query a pipeline run's live phase/status card. */
   pipelineRunStatus: (runId: string) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/status`, parsePipelineRunStatus),
   /** Submit a sketch-card decision (approve/revise) to a pipeline run. */
-  pipelineRunDecision: (runId: string, decision: "approve" | "revise") => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision }) }),
+  pipelineRunDecision: (runId: string, decision: "approve" | "revise", binding?: Record<string, unknown>) => request(`api/pipeline-runs/${encodeURIComponent(runId)}/decision`, parsePipelineRunDecision, { method: "POST", body: JSON.stringify({ decision, binding }) }),
 } as const;
 
 export const api = {

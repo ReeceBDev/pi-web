@@ -67,6 +67,7 @@ export interface PipelineDecisionCard {
   artifact?: string;
   decided?: boolean;
   decisionPending?: boolean;
+  superseded?: boolean;
 }
 
 /** A reference never carries base64; inline images remain compatible with older machines. */
@@ -84,7 +85,7 @@ export type ChatPart =
   | { type: "toolCall"; toolCallId?: string; toolName: string; summary: string; args?: unknown }
   | ToolExecutionPart
   | { type: "toolResult"; toolCallId?: string; toolName: string; text: string; isError: boolean; content?: unknown; details?: unknown }
-  | { type: "pipelineCard"; runId: string; phase: string; closeStatus?: string; card?: PipelineDecisionCard }
+  | { type: "pipelineCard"; runId: string; phase: string; closeStatus?: string; detail?: string; card?: PipelineDecisionCard }
   | { type: "empty" };
 
 export interface ChatLine {

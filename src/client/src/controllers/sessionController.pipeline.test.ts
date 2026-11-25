@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initialAppState } from "../appState";
 import { createMemoryStorage } from "../cachedNewSessions";
 import { setPipelineRunStorageOverrideForTests } from "../cachedPipelineRuns";
@@ -298,7 +298,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
         return Promise.resolve({ ok: true, receipt: { accepted: true, decision, decisionId: "dec-approve-1-x" } });
       },
     };
-    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
     try {
       await harness.controller.startSession({ pipeline: true });
       await flush();
@@ -326,40 +326,37 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     }
   });
 
-  it("notes phase transitions and stops polling once the run closes", async () => {
-    const views: Record<string, unknown>[] = [
-      { phase: "INTAKE" },
-      { phase: "MODULE_DESIGN" },
-      { phase: "CLOSED", closeStatus: "COMPLETED" },
-    ];
-    const statusCalls: string[] = [];
+  it("renders pushed phases once and unsubscribes on closure", async () => {
+    type Notify = Parameters<typeof defaultApi.pipelineRunEvents>[1];
+    const push: { notify?: Notify } = {};
+    const close = vi.fn();
+    const read = vi.fn<typeof defaultApi.pipelineRunStatus>();
     const api: typeof defaultApi = {
       ...defaultApi,
       pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-11" }),
-      pipelineRunStatus: (runId) => {
-        statusCalls.push(runId);
-        return Promise.resolve({ ok: true, view: views[Math.min(statusCalls.length - 1, views.length - 1)] ?? {} });
-      },
+      pipelineRunStatus: read,
+      pipelineRunEvents: (_runId, notify) => { push.notify = notify; return close; },
     };
-    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
     try {
       await harness.controller.startSession({ pipeline: true });
       await harness.controller.send("Build the flinger fix");
-      await new Promise((resolve) => setTimeout(resolve, 80));
       await flush();
-
+      if (!push.notify) throw new Error("status stream was not opened");
+      push.notify({ ok: true, view: { phase: "SKETCH", executionRunId: "current" } });
+      push.notify({ ok: true, view: { phase: "MODULE_DESIGN", executionRunId: "current" } });
+      push.notify({ ok: true, view: { phase: "MODULE_DESIGN", executionRunId: "current" } });
+      push.notify({ ok: true, view: { phase: "CLOSED", closeStatus: "COMPLETED", executionRunId: "current" } });
+      push.notify({ ok: true, view: { phase: "MODULE_DESIGN", executionRunId: "current" } });
       const texts = harness.state.messages.map((line) => line.parts[0]?.type === "text" ? line.parts[0].text : "");
-      expect(texts).toContain("Pipeline phase · MODULE_DESIGN");
+      expect(texts.filter((line) => line === "Pipeline phase · MODULE_DESIGN")).toHaveLength(1);
       expect(texts).toContain("Pipeline run closed · COMPLETED");
-      const callsAfterClose = statusCalls.length;
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(statusCalls.length).toBe(callsAfterClose); // poller stopped on CLOSED
-    } finally {
-      harness.controller.dispose();
-    }
+      expect(close).toHaveBeenCalledOnce();
+      expect(read).not.toHaveBeenCalled();
+    } finally { harness.controller.dispose(); }
   });
 
-  it("stops polling a run whose workflow no longer exists instead of polling the ghost forever", async () => {
+  it("reports a missing workflow after a one-shot read", async () => {
     const statusCalls: string[] = [];
     const api: typeof defaultApi = {
       ...defaultApi,
@@ -369,7 +366,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
         return Promise.resolve({ ok: false, reason: "RUN_STATUS_FAILED", detail: "workflow not found for ID: run-12" });
       },
     };
-    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
     try {
       await harness.controller.startSession({ pipeline: true });
       await harness.controller.send("Build the thing");
@@ -377,7 +374,7 @@ describe("SessionController pipeline launches (+ New Work)", () => {
       await flush();
 
       const texts = harness.state.messages.map((line) => line.parts[0]?.type === "text" ? line.parts[0].text : "");
-      expect(texts).toContain("Pipeline run not found · status polling stopped");
+      expect(texts).toContain("Pipeline run not found");
       const callsAtStop = statusCalls.length;
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(statusCalls.length).toBe(callsAtStop); // no retries against a deleted workflow
@@ -386,26 +383,21 @@ describe("SessionController pipeline launches (+ New Work)", () => {
     }
   });
 
-  it("keeps polling through transient status failures", async () => {
-    const statusCalls: string[] = [];
+  it("reads once when no event transport is available", async () => {
+    const read = vi.fn<typeof defaultApi.pipelineRunStatus>()
+      .mockResolvedValue({ ok: false, reason: "STATUS_READ_TIMEOUT", detail: "" });
     const api: typeof defaultApi = {
       ...defaultApi,
       pipelineRun: () => Promise.resolve({ ok: true, projectRunId: "run-13" }),
-      pipelineRunStatus: (runId) => {
-        statusCalls.push(runId);
-        return Promise.resolve({ ok: false, reason: "RUN_STATUS_FAILED", detail: "ConnectionRefused: temporal unreachable" });
-      },
+      pipelineRunStatus: read,
+      pipelineRunEvents: () => undefined,
     };
-    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] }, { pipelinePollMs: 5 });
+    const harness = makeController(api, { ...initialAppState(), selectedWorkspace: workspace, sessions: [] });
     try {
       await harness.controller.startSession({ pipeline: true });
       await harness.controller.send("Build the thing");
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      const callsBefore = statusCalls.length;
-      await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(statusCalls.length).toBeGreaterThan(callsBefore); // transient failure: poller keeps going
-    } finally {
-      harness.controller.dispose();
-    }
+      await flush();
+      expect(read).toHaveBeenCalledExactlyOnceWith("run-13");
+    } finally { harness.controller.dispose(); }
   });
 });

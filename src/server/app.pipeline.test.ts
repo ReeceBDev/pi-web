@@ -60,7 +60,7 @@ describe("buildApp pipeline run route", () => {
     if (argvOut === undefined) throw new Error("stub argv output path not configured");
     const recorded: unknown = JSON.parse(await readFile(argvOut, "utf8"));
     expect(recorded).toMatchObject({
-      argv: ["--repo", workDir, "--goal-file", expect.stringMatching(/goal\.txt$/), "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
+      argv: ["--repo", workDir, "--request-id", expect.stringMatching(/^[0-9a-f-]{36}$/), "--goal-file", expect.stringMatching(/goal\.txt$/), "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
       goal: "Ship the flinger fix",
     });
   });

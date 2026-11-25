@@ -15,6 +15,7 @@ export class PipelineCard extends LitElement {
   @property({ attribute: false }) runId = "";
   @property({ attribute: false }) phase = "";
   @property({ attribute: false }) closeStatus?: string;
+  @property({ attribute: false }) detail?: string;
   @property({ attribute: false }) card?: PipelineDecisionCard;
   @property({ attribute: false }) onDecide?: PipelineDecideCallback;
 
@@ -33,7 +34,8 @@ export class PipelineCard extends LitElement {
           <span class="phase" role="status" aria-live="polite">${closed ? `closed · ${this.closeStatus ?? "unknown"}` : `phase · ${this.phase}`}</span>
           <span class="run">${this.runId}</span>
         </header>
-        ${this.renderBody()}
+        ${this.detail !== undefined ? html`<p class="idle">${this.detail}</p>` : null}
+        ${closed ? null : this.renderBody()}
       </article>
     `;
   }
@@ -50,7 +52,7 @@ export class PipelineCard extends LitElement {
       ${card.artifact === undefined
         ? html`<p class="artifact-missing">artifact ${card.artifactSha256.slice(0, 12)}… (content unavailable)</p>`
         : html`<details class="artifact"><summary>artifact</summary><pre>${card.artifact}</pre></details>`}
-      ${card.decided === true
+      ${card.superseded === true ? html`<p class="decided">Card closed</p>` : card.decided === true
         ? html`<p class="decided" role="status">Decided · recorded</p>`
         : html`
           <div class="actions">
