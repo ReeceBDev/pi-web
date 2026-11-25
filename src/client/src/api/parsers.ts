@@ -2147,18 +2147,6 @@ export function parsePipelineRunAck(value: unknown): PipelineRunAck {
   };
 }
 
-export type PipelineRunStatus = { ok: true; view: Record<string, unknown> } | { ok: false; reason: string; detail: string };
-
-export function parsePipelineRunStatus(value: unknown): PipelineRunStatus {
-  const view = isRecord(value) ? optionalRecord(value, "view") : undefined;
-  if (view !== undefined) return { ok: true, view };
-  return {
-    ok: false,
-    reason: isRecord(value) && typeof value["reason"] === "string" ? value["reason"] : "pipeline_failed",
-    detail: isRecord(value) && typeof value["detail"] === "string" ? value["detail"] : "",
-  };
-}
-
 export type PipelineRunDecision = { ok: true; receipt: Record<string, unknown> } | { ok: false; reason: string; detail: string };
 
 export function parsePipelineRunDecision(value: unknown): PipelineRunDecision {

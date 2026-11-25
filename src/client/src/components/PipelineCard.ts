@@ -1,14 +1,17 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { resolveAppUrl } from "../appUrl";
 import type { PipelineDecisionCard } from "./shared";
 
 export type PipelineDecideCallback = (decision: "approve" | "revise") => void | Promise<void>;
 
 /**
  * The pipeline run's live decision card in the run's chat: current phase, the
- * open question's artifact, and Approve/Revise buttons. The buttons call back
- * into the session controller, which posts the decision — typing "approve" is
- * never required to drive a run.
+ * open question's artifact, and Approve/Revise buttons. The artifact bytes are
+ * fetched from /api/pipeline-runs/artifact/<sha256> (the byte proxy of the
+ * pipeline's content-addressed store) when the card renders. The buttons call
+ * back into the session controller, which posts the decision — typing
+ * "approve" is never required to drive a run.
  */
 @customElement("pipeline-card")
 export class PipelineCard extends LitElement {
@@ -20,9 +23,15 @@ export class PipelineCard extends LitElement {
 
   @state() private submitting: "approve" | "revise" | undefined;
   @state() private error = "";
+  @state() private artifact: { sha256: string; status: "loading" | "ready" | "unavailable"; text?: string } | undefined;
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (changed.has("card")) this.error = "";
+    if (changed.has("card")) {
+      this.error = "";
+      const sha256 = this.card?.artifactSha256;
+      if (sha256 === undefined) this.artifact = undefined;
+      else if (this.artifact?.sha256 !== sha256) void this.fetchArtifact(sha256);
+    }
   }
 
   override render(): TemplateResult {
@@ -47,9 +56,7 @@ export class PipelineCard extends LitElement {
         <span class="q-label">${card.stage ?? "decision"} · ${card.questionId}</span>
         <span class="q-rev">rev ${String(card.revision)}</span>
       </div>
-      ${card.artifact === undefined
-        ? html`<p class="artifact-missing">artifact ${card.artifactSha256.slice(0, 12)}… (content unavailable)</p>`
-        : html`<details class="artifact"><summary>artifact</summary><pre>${card.artifact}</pre></details>`}
+      ${this.renderArtifact(card)}
       ${card.decided === true
         ? html`<p class="decided" role="status">Decided · recorded</p>`
         : html`
@@ -61,6 +68,37 @@ export class PipelineCard extends LitElement {
         `}
       ${this.error === "" ? null : html`<p class="error" role="alert">${this.error}</p>`}
     `;
+  }
+
+  private renderArtifact(card: PipelineDecisionCard): TemplateResult {
+    const artifact = this.artifact;
+    if (card.artifactSha256 === undefined) return html``;
+    if (artifact === undefined || artifact.status === "loading") return html`<p class="artifact-missing">loading artifact…</p>`;
+    if (artifact.status === "unavailable" || artifact.text === undefined) {
+      return html`<p class="artifact-missing">artifact ${card.artifactSha256.slice(0, 12)}… (content unavailable)</p>`;
+    }
+    return html`<details class="artifact"><summary>artifact</summary><pre>${artifact.text}</pre></details>`;
+  }
+
+  /** Fetch the card's artifact bytes from the byte proxy route; only the
+   * fetch for the currently rendered sha256 may land. */
+  private async fetchArtifact(sha256: string): Promise<void> {
+    this.artifact = { sha256, status: "loading" };
+    try {
+      const response = await fetch(resolveAppUrl(`api/pipeline-runs/artifact/${encodeURIComponent(sha256)}`));
+      if (!response.ok) throw new Error(`artifact fetch failed · ${String(response.status)}`);
+      this.applyArtifact(sha256, { sha256, status: "ready", text: await response.text() });
+    } catch {
+      this.applyArtifact(sha256, { sha256, status: "unavailable" });
+    }
+  }
+
+  /** Land a fetch result only when the card still shows this sha256 (a newer
+   * card, or one without an artifact, replaces the in-flight request). */
+  private applyArtifact(sha256: string, next: { sha256: string; status: "ready" | "unavailable"; text?: string }): void {
+    const current = this.artifact;
+    if (current?.sha256 !== sha256) return;
+    this.artifact = next;
   }
 
   private async decide(decision: "approve" | "revise"): Promise<void> {

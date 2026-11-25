@@ -11,7 +11,7 @@ import { ProjectService } from "./projects/projectService.js";
 import { ProjectStore } from "./storage/projectStore.js";
 import type { MachineClient } from "./machines/machineClient.js";
 import type { UnitSupervisorDelegate } from "./machines/unitSupervisorClient.js";
-import type { PipelineDecisionDelegate, PipelineRunDelegate, PipelineStatusDelegate } from "./machines/pipelineRoutes.js";
+import type { PipelineDecisionDelegate, PipelineRunDelegate } from "./machines/pipelineRoutes.js";
 import { MachineService } from "./machines/machineService.js";
 import { MachineStore } from "./machines/machineStore.js";
 import type { WorkspaceCatalog } from "./workspaces/workspaceCatalog.js";
@@ -27,7 +27,7 @@ interface AppTestContext {
   remoteClient: MachineClient | undefined;
   unitSupervisor: UnitSupervisorDelegate | undefined;
   pipelineRunner: PipelineRunDelegate | undefined;
-  pipelineCommands: (PipelineStatusDelegate & PipelineDecisionDelegate) | undefined;
+  pipelineCommands: PipelineDecisionDelegate | undefined;
   readonly sessionDaemonRequests: CapturedSessionDaemonRequest[];
   readonly piPackageRequests: CapturedPiPackageRequest[];
   readonly workspaceCatalog: AppTestWorkspaceCatalog;
@@ -41,7 +41,7 @@ let projectDir: string | undefined;
 let remoteClient: MachineClient | undefined;
 let unitSupervisor: UnitSupervisorDelegate | undefined;
 let pipelineRunner: PipelineRunDelegate | undefined;
-let pipelineCommands: (PipelineStatusDelegate & PipelineDecisionDelegate) | undefined;
+let pipelineCommands: PipelineDecisionDelegate | undefined;
 let sessionDaemonRequests: CapturedSessionDaemonRequest[] = [];
 let piPackageRequests: CapturedPiPackageRequest[] = [];
 let workspaceCatalog: AppTestWorkspaceCatalog | undefined;
@@ -215,13 +215,12 @@ function delegatingPipelineRunner(): PipelineRunDelegate {
   return { run: (request) => delegate().run(request) };
 }
 
-function delegatingPipelineCommands(): PipelineStatusDelegate & PipelineDecisionDelegate {
-  const delegate = (): PipelineStatusDelegate & PipelineDecisionDelegate => {
+function delegatingPipelineCommands(): PipelineDecisionDelegate {
+  const delegate = (): PipelineDecisionDelegate => {
     if (pipelineCommands === undefined) throw new Error("No pipeline command client configured");
     return pipelineCommands;
   };
   return {
-    status: (runId) => delegate().status(runId),
     decide: (runId, decision, actor) => delegate().decide(runId, decision, actor),
   };
 }

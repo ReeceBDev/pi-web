@@ -124,9 +124,6 @@ export const emptyPage: MessagePage = { messages: [], start: 0, total: 0 };
 /** API fixture for scenarios whose selected sessions have empty, idle transcripts. */
 export const emptyTranscriptApi: typeof api = {
   ...api,
-  // Pipeline status polls hit the real CLI spawn route when unmocked; keep
-  // them silent (pollPipelineRun ignores ok:false) in suites that never mock it.
-  pipelineRunStatus: () => Promise.resolve({ ok: false, reason: "pipeline_status_unmocked", detail: "" }),
   transcriptSnapshot: (session) => Promise.resolve({
     page: emptyPage,
     status: status(sessionLookupId(session)),

@@ -58,13 +58,14 @@ export interface ToolExecutionPart {
 /** The pipeline run's open decision card (question + artifact), rendered in
  * the run's chat with Approve/Revise buttons. decided/decisionPending are
  * client-side button state; the pipeline stays the source of truth for
- * whether a question is open. */
+ * whether a question is open. artifactSha256 is present on cards that carry
+ * an artifact (sketch cards); the card component fetches its bytes from
+ * /api/pipeline-runs/artifact/<sha256> when it renders. */
 export interface PipelineDecisionCard {
   questionId: string;
-  artifactSha256: string;
+  artifactSha256?: string;
   revision: number;
   stage?: string;
-  artifact?: string;
   decided?: boolean;
   decisionPending?: boolean;
 }
