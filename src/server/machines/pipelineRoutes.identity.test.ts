@@ -1,5 +1,4 @@
 import { ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import Fastify from "fastify";
 import { expect, it } from "vitest";
@@ -10,9 +9,11 @@ it("requires an identity and passes it from HTTP to CLI without replacing it on 
   const received: string[][] = [];
   const runner = new ChildPipelineRunClient({
     scriptPath: "/offline/start-run.js",
-    spawnImpl: (_command, args) => {
+    spawnImpl: (_command, args, stdin) => {
       received.push(args);
-      expect(readFileSync(args[args.indexOf("--goal-file") + 1] ?? "", "utf8")).toBe("Repair the parser");
+      // The goal text rides on the child's stdin (--goal-stdin), never a tmp file.
+      expect(args).toContain("--goal-stdin");
+      expect(stdin).toBe("Repair the parser");
       const child = new ChildProcess();
       const stdout = new PassThrough();
       child.stdout = stdout;

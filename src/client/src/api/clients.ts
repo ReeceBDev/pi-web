@@ -4,7 +4,7 @@ import type { SessionDefaultsUpdate } from "../../../shared/apiTypes";
 import type { AskUserSubmission, DeleteWorkspaceFileResponse, ExtensionDialogAnswer, FileSuggestion, MoveWorkspaceFileOptions, PiPackageInstallRequest, PiPackageRemoveRequest, PiPackageScope, PiPackageUpdateRequest, PiWebConfigValues, PromptAttachment, ServerNoticeDismissRequest, SessionBulkMutationRef, SessionCleanupRequest, SessionModelScopeMode, SessionNotificationDismissThrough, SessionRef, SessionTreeForkRequest, SessionTreeForkResult, SessionTreeNavigateRequest, SessionUnreadAcknowledgeRequest, WorkspaceRemovalRequest, WriteWorkspaceFileOptions } from "../../../shared/apiTypes";
 import { resolveAppUrl } from "../appUrl";
 import { request } from "./http";
-import { serverPipelineRows } from "../cachedPipelineRuns";
+import { serverPipelineRows } from "../pipelineRunCatalog";
 import {
   arrayOf,
   parseAborted,
@@ -404,23 +404,6 @@ export const supervisorApi = {
 export const pipelineApi = {
   /** Launch a pipeline run on a repo workspace (machine-local only). */
   pipelineRun: (repoPath: string, goal: string, requestId: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ requestId, repoPath, goal }), signal: AbortSignal.timeout(24_000) }),
-  pipelineRunEvents: (runId: string, execution: string | undefined, onStatus: (result: ReturnType<typeof parsePipelineRunStatus>) => void, onDisconnect: () => void) => {
-    if (typeof EventSource === "undefined") return undefined;
-    const query = execution === undefined ? "" : "?" + new URLSearchParams({ execution }).toString();
-    const source = new EventSource(resolveAppUrl("api/pipeline-runs/" + encodeURIComponent(runId) + "/events" + query));
-    source.onmessage = (event: MessageEvent<string>) => {
-      try {
-        const view: unknown = JSON.parse(event.data);
-        if (typeof view === "object" && view !== null && "ok" in view && view.ok === true) {
-          onStatus(parsePipelineRunStatus({ ok: true, view }));
-        } else {
-          onStatus(parsePipelineRunStatus(view));
-        }
-      } catch { onDisconnect(); }
-    };
-    source.onerror = onDisconnect;
-    return () => { source.close(); };
-  },
   /** Query a pipeline run's live phase/status card. */
   pipelineRunStatus: (runId: string, execution?: string) => {
     const query = execution !== undefined ? "?" + new URLSearchParams({ execution }).toString() : "";

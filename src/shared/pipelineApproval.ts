@@ -1,5 +1,15 @@
 export interface PipelineRevisionFeedback { reason: string; acceptanceRef?: string }
 
+/** A decision submitted but not yet confirmed by the pipeline. In-memory only
+ * retry bookkeeping: the approved event-stream design keeps no browser
+ * storage, so an unconfirmed decision is retried within the page session and
+ * re-binds the run's current open card server-side. */
+export interface PendingPipelineDecision {
+  binding?: PipelineApprovalBinding;
+  decision: "approve" | "revise";
+  feedback?: PipelineRevisionFeedback;
+}
+
 export function readPipelineFeedback(value: unknown): PipelineRevisionFeedback | undefined {
   if (typeof value !== "object" || !value || !("reason" in value) || typeof value.reason !== "string" ||
       !value.reason.trim() || value.reason.length > 4000) return undefined;

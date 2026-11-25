@@ -2,7 +2,6 @@ import { api as defaultApi, type Project, type Workspace } from "../api";
 import { resetWorkspaceScopedState, type AppState } from "../appState";
 import { BrowserErrorReporter, projectBrowserErrorScope, workspaceBrowserErrorScope } from "../browserErrors";
 import { mergeCachedNewSessions } from "../cachedNewSessions";
-import { mergePipelineRuns } from "../cachedPipelineRuns";
 import { machineProjectKey } from "../machineKeys";
 import { selectedMachineId, type GetState, type NavigationDestinationOptions, type NavigationFreshness, type NavigationScope, type NavigationSelection, type RouteTarget, type SetState, type UpdateUrl } from "./types";
 import type { SessionController } from "./sessionController";
@@ -115,29 +114,41 @@ export class WorkspaceController {
     this.setState({ selectedWorkspace: workspace, isLoadingWorkspaces: false, ...resetWorkspaceScopedState() });
     try {
       const cachedSessions = this.getState().sessionsByWorkspacePath[workspace.path];
-      const loadedSessions = cachedSessions
-        ?? (target?.signal === undefined
+      // A cached listing predates any session created after it was fetched —
+      // on the phone (push flow), in another tab, or from a CLI. When the
+      // restore names a specific session and the cache does not contain it,
+      // trusting the cache would report a false "Session not found" and hide
+      // the row: ignore the cache, fetch fresh server truth, and write it
+      // back below so the workspace list converges too.
+      const cacheLacksTarget = target?.sessionId !== undefined
+        && target.sessionId !== ""
+        && !(cachedSessions?.some((session) => session.id === target.sessionId) ?? false);
+      const loadedSessions = cachedSessions !== undefined && !cacheLacksTarget
+        ? cachedSessions
+        : (target?.signal === undefined
           ? await this.api.sessions(workspace.path, machineId)
           : await this.api.sessions(workspace.path, machineId, { signal: target.signal }));
       // mergeCachedNewSessions rewrites the cached-new-session storage; like the
       // fetch above, its effect must only survive alongside the state write that
-      // the guards below authorize. Run it after them. mergePipelineRuns adds
-      // rows for cached pipeline runs (write half dies with the page), so a
-      // reload of a workspace that launched a run restores its chat row on
-      // every path that builds the workspace listing — boot route restore
-      // included, not just refreshCurrentWorkspaceSessions.
+      // the guards below authorize. Run it after them. Pipeline run rows arrive
+      // inside the session listing itself (api.sessions merges the server
+      // pipeline-chat catalog), so a reload of a workspace that launched a run
+      // restores its chat row on every path that builds the workspace listing —
+      // boot route restore included, not just refreshCurrentWorkspaceSessions.
       if (!this.navigationIsCurrent(navigation)
         || !workspaceMutationIsCurrent(target)
         || selectedMachineId(this.getState()) !== machineId
         || this.getState().selectedWorkspace?.id !== workspace.id
         || this.getState().selectedProject?.id !== workspace.projectId) return;
-      const sessions = mergePipelineRuns(workspace.path, mergeCachedNewSessions(workspace.path, loadedSessions, machineId), machineId);
+      const sessions = mergeCachedNewSessions(workspace.path, loadedSessions, machineId);
       this.sessions.registerRestoredPipelineStarts(sessions, workspace, machineId);
       this.setState({
         sessions,
         // A fresh listing is newer than the catalog snapshot; write it back so
         // returning to this workspace does not resurrect a stale session list.
-        ...(cachedSessions === undefined ? { sessionsByWorkspacePath: { ...this.getState().sessionsByWorkspacePath, [workspace.path]: loadedSessions } } : {}),
+        // This includes the cacheLacksTarget refetch above: the fresh list
+        // replaces the cache that was missing the requested session.
+        ...(cachedSessions === undefined || cacheLacksTarget ? { sessionsByWorkspacePath: { ...this.getState().sessionsByWorkspacePath, [workspace.path]: loadedSessions } } : {}),
       });
       const session = this.sessions.preferredSession(workspace.path, sessions, target?.sessionId);
       if (!this.navigationIsCurrent(navigation) || !workspaceMutationIsCurrent(target)) return;

@@ -14,7 +14,7 @@ describe("createPiWebStatusCache", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it("returns stale status immediately while refreshing in the background", async () => {
+  it("waits for the refresh and serves fresh data when the load completes within the grace window", async () => {
     let now = 1_000;
     const load = vi.fn()
       .mockResolvedValueOnce(status("first"))
@@ -24,7 +24,23 @@ describe("createPiWebStatusCache", () => {
     await expect(cache.get()).resolves.toMatchObject({ generatedAt: "first" });
     now = 1_101;
 
+    await expect(cache.get()).resolves.toMatchObject({ generatedAt: "second" });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves stale data when the refresh outlasts the grace window, then serves the completed refresh", async () => {
+    let now = 1_000;
+    const slowLoad = createDeferred<PiWebStatusResponse>();
+    const load = vi.fn()
+      .mockResolvedValueOnce(status("first"))
+      .mockReturnValueOnce(slowLoad.promise);
+    const cache = createPiWebStatusCache(load, { ttlMs: 100, now: () => now, staleGraceMs: 20 });
+
     await expect(cache.get()).resolves.toMatchObject({ generatedAt: "first" });
+    now = 1_101;
+
+    await expect(cache.get()).resolves.toMatchObject({ generatedAt: "first" });
+    slowLoad.resolve(status("second"));
     await waitForMicrotasks();
 
     await expect(cache.get()).resolves.toMatchObject({ generatedAt: "second" });
@@ -85,7 +101,7 @@ describe("createPiWebStatusCache", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it("retains stale status and reports background refresh errors", async () => {
+  it("retains stale status across a failed refresh, reports the error, and serves the retried refresh", async () => {
     let now = 1_000;
     const refreshError = new Error("refresh failed");
     const errorReported = createDeferred<unknown>();
@@ -105,9 +121,6 @@ describe("createPiWebStatusCache", () => {
     await expect(errorReported.promise).resolves.toBe(refreshError);
     expect(onError).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledTimes(2);
-
-    await expect(cache.get()).resolves.toMatchObject({ generatedAt: "first" });
-    await waitForMicrotasks();
 
     await expect(cache.get()).resolves.toMatchObject({ generatedAt: "second" });
     expect(load).toHaveBeenCalledTimes(3);
@@ -146,6 +159,25 @@ describe("createPiWebStatusCache", () => {
     await expect(first).resolves.toMatchObject({ generatedAt: "first" });
 
     await expect(cache.get()).resolves.toMatchObject({ generatedAt: "second" });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("deduplicates concurrent expired-cache gets into one load", async () => {
+    let now = 1_000;
+    const deferred = createDeferred<PiWebStatusResponse>();
+    const load = vi.fn()
+      .mockResolvedValueOnce(status("first"))
+      .mockReturnValueOnce(deferred.promise);
+    const cache = createPiWebStatusCache(load, { ttlMs: 100, now: () => now, staleGraceMs: 500 });
+
+    await expect(cache.get()).resolves.toMatchObject({ generatedAt: "first" });
+    now = 1_101;
+
+    const first = cache.get();
+    const second = cache.get();
+    deferred.resolve(status("second"));
+    await expect(first).resolves.toMatchObject({ generatedAt: "second" });
+    await expect(second).resolves.toMatchObject({ generatedAt: "second" });
     expect(load).toHaveBeenCalledTimes(2);
   });
 

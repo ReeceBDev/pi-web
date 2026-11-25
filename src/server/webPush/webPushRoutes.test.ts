@@ -160,7 +160,7 @@ describe("web push gateway proxy boundary", () => {
 describe("FCM proxy routes (launcher box-push contract)", () => {
   let app: FastifyInstance;
   const calls: { method: string; path: string }[] = [];
-  const daemon = { request: (method: string, path: string) => { calls.push({ method, path }); return Promise.resolve({ statusCode: 200, headers: {} as Record<string, string>, body: JSON.stringify({ ok: true }) }); } };
+  const daemon = { request: (method: string, path: string) => { calls.push({ method, path }); return Promise.resolve({ statusCode: 200, headers: {}, body: JSON.stringify({ ok: true }) }); } };
 
   beforeEach(() => {
     app = Fastify({ logger: false });

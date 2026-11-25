@@ -172,4 +172,87 @@ describe("SessionController live events", () => {
 
     expect(state.sessions.map((session) => session.id)).toEqual(["old-session"]);
   });
+
+  it("adds a created session to every loaded workspace cache for its cwd, even viewed from another workspace", () => {
+    const otherWorkspaceList: SessionInfo[] = [{ ...oldSession, id: "other-ws-session", cwd: "/repo" }];
+    let state: AppState = {
+      ...initialAppState(),
+      selectedWorkspace: { ...workspace, path: "/other-ws" },
+      sessions: [],
+      sessionsByWorkspacePath: { [workspace.path]: [oldSession], "/other-ws": otherWorkspaceList },
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { socket: new FakeSocket() },
+    );
+    const spawned: SessionInfo = { ...oldSession, id: "spawned-session", path: "/tmp/spawned-session.jsonl" };
+
+    controller.applyGlobalEvent({ type: "session.created", session: spawned });
+
+    // The loaded cache for the session's workspace learns the session...
+    expect(state.sessionsByWorkspacePath[workspace.path]?.map((session) => session.id)).toEqual(["spawned-session", "old-session"]);
+    // ...the selected workspace's unrelated cache is untouched...
+    expect(state.sessionsByWorkspacePath["/other-ws"]?.map((session) => session.id)).toEqual(["other-ws-session"]);
+    // ...and the not-current workspace view itself is left alone.
+    expect(state.sessions).toEqual([]);
+  });
+
+  it("never fabricates a workspace cache for a created session in an unloaded workspace", () => {
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [oldSession] };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { socket: new FakeSocket() },
+    );
+
+    controller.applyGlobalEvent({ type: "session.created", session: { ...oldSession, id: "elsewhere", cwd: "/not-loaded" } });
+
+    expect(state.sessionsByWorkspacePath["/not-loaded"]).toBeUndefined();
+  });
+
+  it("patches a renamed session inside loaded workspace caches", () => {
+    let state: AppState = {
+      ...initialAppState(),
+      selectedWorkspace: { ...workspace, path: "/other-ws" },
+      sessions: [],
+      sessionsByWorkspacePath: { [workspace.path]: [oldSession] },
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { socket: new FakeSocket() },
+    );
+
+    controller.applyGlobalEvent({ type: "session.name", sessionId: oldSession.id, name: "Fresh name" });
+
+    expect(state.sessionsByWorkspacePath[workspace.path]?.[0]?.name).toBe("Fresh name");
+  });
+
+  it("patches live message counts inside loaded workspace caches", () => {
+    let state: AppState = {
+      ...initialAppState(),
+      selectedWorkspace: { ...workspace, path: "/other-ws" },
+      sessions: [],
+      sessionsByWorkspacePath: { [workspace.path]: [oldSession] },
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { socket: new FakeSocket() },
+    );
+
+    controller.applyGlobalEvent({ type: "status.update", status: { ...status(oldSession.id), messageCount: 9 } });
+    controller.flushPendingUpdates();
+
+    expect(state.sessionsByWorkspacePath[workspace.path]?.[0]?.messageCount).toBe(9);
+  });
 });

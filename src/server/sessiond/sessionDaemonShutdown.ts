@@ -9,6 +9,8 @@ export interface SessionDaemonShutdownDependencies {
     stop(): void | Promise<void>;
   };
   catalogRefresher: { dispose(): void | Promise<void> };
+  workspaceWarmer: { dispose(): void | Promise<void> };
+  browserReaper: { dispose(): void | Promise<void> };
   auth: { dispose(): void | Promise<void> };
   sessions: { dispose(): void | Promise<void> };
   unreadStore: { flush(): void | Promise<void> };
@@ -34,6 +36,8 @@ export async function runSessionDaemonShutdown(options: SessionDaemonShutdownOpt
     // and host-owned resources observe cancellation and drain below.
     ["cancel server plugin lifetimes", () => dependencies.serverPlugins.beginShutdown()],
     ["dispose catalog refresher", () => dependencies.catalogRefresher.dispose()],
+    ["dispose workspace warmer", () => dependencies.workspaceWarmer.dispose()],
+    ["dispose browser reaper", () => dependencies.browserReaper.dispose()],
     ["close workspace removal work", () => dependencies.workspaceRemovals.closeAll()],
     ["close plugin backend work", () => dependencies.pluginBackends.closeAll()],
     ["close workspace provider work", () => dependencies.workspaceProviders.closeAll()],

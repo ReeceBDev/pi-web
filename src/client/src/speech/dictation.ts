@@ -10,6 +10,8 @@ export interface DictationEvents {
 export interface DictationController {
   /** Stop capturing, return the full transcript. */
   finish(): Promise<string>;
+  /** Transcript committed so far; readable even when finish() fails. */
+  committedText?(): string;
   /** Stop capturing and discard everything server-side. */
   cancel(): void;
 }
@@ -27,6 +29,12 @@ const WORKLET_URL = "speech-capture-worklet.js";
  */
 export async function startDictation(events: DictationEvents = {}): Promise<DictationController> {
   const session = await requestJson("POST", "api/speech/sessions", parseSession);
+  // Track the latest committed transcript so it stays deliverable if finish() fails.
+  let committed = "";
+  const trackedEvents: DictationEvents = {
+    ...events,
+    onPartial: (text) => { committed = text; events.onPartial?.(text); },
+  };
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } });
@@ -74,7 +82,7 @@ export async function startDictation(events: DictationEvents = {}): Promise<Dict
     const payload = int16BatchesToBuffer(pending, pendingSamples);
     pending = [];
     pendingSamples = 0;
-    posting = postAudio(session.id, payload, events);
+    posting = postAudio(session.id, payload, trackedEvents);
   }, POST_INTERVAL_MS);
 
   const cleanup = () => {
@@ -97,11 +105,12 @@ export async function startDictation(events: DictationEvents = {}): Promise<Dict
       pending = [];
       pendingSamples = 0;
       if (payload.byteLength > 0) {
-        posting = postAudio(session.id, payload, events);
+        posting = postAudio(session.id, payload, trackedEvents);
       }
       const final = await requestJson("POST", `api/speech/sessions/${encodeURIComponent(session.id)}/finish`, parseText);
       return final.text;
     },
+    committedText: () => committed,
     cancel(): void {
       cleanup();
       void discardSession(session.id);

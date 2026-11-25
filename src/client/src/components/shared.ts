@@ -55,10 +55,8 @@ export interface ToolExecutionPart {
   preview?: ToolPreview;
 }
 
-/** The pipeline run's open decision card (question + artifact), rendered in
- * the run's chat with Approve/Revise buttons. decided/decisionPending are
- * client-side button state; the pipeline stays the source of truth for
- * whether a question is open. */
+/** Delivery digests from a settled run (status view and transcript-restored
+ * card lines); the card links the build/report artifacts by digest. */
 export interface PipelineDeliveryView {
   buildDigest: string;
   reportDigest: string;
@@ -66,10 +64,17 @@ export interface PipelineDeliveryView {
   diff?: string;
 }
 
+/** The pipeline run's open decision card (question + artifact), rendered in
+ * the run's chat with Approve/Revise buttons. decided/decisionPending are
+ * client-side button state; the pipeline stays the source of truth for
+ * whether a question is open. artifactSha256 is optional: cards that carry
+ * an artifact fetch its bytes from /api/pipeline-runs/artifact/<sha256> when
+ * the card renders; transcript-restored rows may instead carry inline
+ * artifact bytes or a review binding saved by older clients. */
 export interface PipelineDecisionCard {
   binding?: import("../../../shared/pipelineApproval").PipelineApprovalBinding;
   questionId: string;
-  artifactSha256: string;
+  artifactSha256?: string;
   revision: number;
   stage?: string;
   artifact?: string;
@@ -80,7 +85,7 @@ export interface PipelineDecisionCard {
 }
 
 /** A reference never carries base64; inline images remain compatible with older machines. */
-export type ChatImagePart =
+export type ChatImagePart = 
   | { type: "image"; mimeType: string; data: string; mediaId?: never; byteSize?: never }
   | (SessionMediaReference & { data?: never });
 
@@ -94,7 +99,7 @@ export type ChatPart =
   | { type: "toolCall"; toolCallId?: string; toolName: string; summary: string; args?: unknown }
   | ToolExecutionPart
   | { type: "toolResult"; toolCallId?: string; toolName: string; text: string; isError: boolean; content?: unknown; details?: unknown }
-  | { type: "pipelineCard"; runId: string; phase: string; closeStatus?: string; detail?: string; stale?: boolean; delivery?: PipelineDeliveryView; retry?: import("../cachedPipelineRuns").PendingPipelineDecision; card?: PipelineDecisionCard }
+  | { type: "pipelineCard"; runId: string; phase: string; closeStatus?: string; detail?: string; stale?: boolean; delivery?: PipelineDeliveryView; retry?: import("../../../shared/pipelineApproval").PendingPipelineDecision; card?: PipelineDecisionCard }
   | { type: "empty" };
 
 export interface ChatLine {
@@ -202,6 +207,8 @@ export const appStyles = css`
     main.workspace-view chat-view, main.workspace-view prompt-editor, main.workspace-view status-bar,
     main.workspace-view .empty { display: none; }
     main.workspace-view { overflow: hidden; }
+    /* rbowen (previewchat): file-preview chat pill open — the prompt editor overlays the panel bottom. Anchored to the app host (fixed, height --vvh), so it lifts above the keyboard like the shell composer. */
+    main.workspace-view.preview-chat-open prompt-editor { position: absolute; left: 0; right: 0; bottom: 0; z-index: 40; display: flex; box-shadow: 0 -10px 30px rgb(0 0 0 / 0.35); }
     .shell > status-bar { display: none; }
   }
   @media (max-width: 760px) {
@@ -271,9 +278,9 @@ export const listStyles = css`
   :host { display: flex; flex-direction: column; min-height: 0; overflow: hidden; color: var(--pi-text); font: 14px system-ui, sans-serif; }
   :host([hidden]) { display: none !important; }
   :host([collapsed]) { flex: 0 0 auto; min-height: auto; overflow: hidden; }
-  section { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 10px; }
+  section { box-sizing: border-box; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 4px 0; }
   h2 { flex: 0 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 0 8px; color: var(--pi-muted); font-size: 12px; text-transform: uppercase; }
-  section > h2 { position: relative; z-index: 3; margin: 0 -10px; padding: 0 10px 8px; background: var(--pi-bg); box-shadow: ${scrollBoundaryShadow}; }
+  section > h2 { position: relative; z-index: 3; margin: 0; padding: 0 10px 8px; background: var(--pi-bg); box-shadow: ${scrollBoundaryShadow}; }
   .list-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
   button { border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 9px; cursor: pointer; }
   section > button { display: block; width: 100%; text-align: left; margin: 6px 0; }
@@ -284,14 +291,14 @@ export const listStyles = css`
   .section-toggle .section-selected { display: block; color: var(--pi-text); font-size: 12px; font-weight: 600; line-height: 1.25; text-transform: none; }
   .section-toggle .section-count { flex: 0 0 auto; display: inline; color: var(--pi-muted); font-size: inherit; }
   .section-toggle small { display: inline; color: inherit; font-size: inherit; }
-  .action-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; margin: 6px 0; cursor: pointer; }
+  .action-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; margin: 0; cursor: pointer; }
+  .action-row + .action-row { border-top: 1px solid var(--pi-border-muted); }
   .action-row:focus-visible { outline: 2px solid var(--pi-accent); outline-offset: 2px; border-radius: 8px; }
   .action-row.selected .action-main, .action-row.selected .action-menu-toggle { border-color: var(--pi-accent); background: var(--pi-selection-bg); }
   .action-row.archived .action-main { color: var(--pi-muted); }
-  .action-main { position: relative; box-sizing: border-box; min-width: 0; width: 100%; border: 1px solid var(--pi-border); border-top-right-radius: 0; border-bottom-right-radius: 0; border-top-left-radius: 8px; border-bottom-left-radius: 8px; background: var(--pi-surface); color: var(--pi-text); padding: 7px 22px 7px calc(9px + var(--depth, 0) * 16px); text-align: left; }
+  .action-main { position: relative; box-sizing: border-box; min-width: 0; width: 100%; border: 0; background: transparent; color: var(--pi-text); padding: 4px 16px 4px calc(10px + var(--depth, 0) * 16px); text-align: left; }
   .action-name { display: -webkit-box; max-height: 2.5em; overflow: hidden; overflow-wrap: anywhere; line-height: 1.25; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .action-row:not(.selected):hover .action-main { background: var(--pi-surface-hover); }
-  .workspace-row .action-main { border-radius: 8px 0 0 8px; }
   .workspace-primary { min-width: 0; display: flex; align-items: baseline; gap: 6px; }
   .workspace-primary-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .workspace-status { flex: 0 0 auto; color: var(--pi-warning); font-size: 12px; }
@@ -322,7 +329,7 @@ export const listStyles = css`
   .unread-ring .activity-indicator { width: 5px; height: 5px; margin: 0; vertical-align: 0; }
   .action-activity .unread-ring { margin: 0; vertical-align: 0; }
   .action-menu { position: relative; align-self: stretch; }
-  .action-menu-toggle { display: grid; place-items: center; height: 100%; min-width: 32px; padding: 0; color: var(--pi-muted); border-left: 0; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .action-menu-toggle { display: grid; place-items: center; height: 100%; min-width: 32px; padding: 0; border: 0; color: var(--pi-muted); }
   .action-menu-toggle:hover { color: var(--pi-text); background: var(--pi-surface-hover); }
   .action-menu-panel { position: fixed; z-index: 50; box-sizing: border-box; min-width: min(120px, calc(100vw - 16px)); overflow: auto; padding: 4px; border: 1px solid var(--pi-border); border-radius: 8px; background: var(--pi-surface); box-shadow: 0 8px 24px var(--pi-shadow); overflow-wrap: anywhere; }
   .action-menu-panel button { display: block; width: 100%; text-align: left; white-space: normal; overflow-wrap: anywhere; border: 0; background: transparent; color: var(--pi-text); }

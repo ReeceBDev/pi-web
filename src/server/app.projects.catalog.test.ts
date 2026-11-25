@@ -102,7 +102,7 @@ describe("buildApp project catalog route", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("returns every project, its workspaces, and their session lists in one response", async () => {
+  it("returns every project and its workspaces in one response, without session lists", async () => {
     const addResponse = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Cataloged", path: projectDir, create: true } });
     expect(addResponse.statusCode).toBe(200);
     const added = addResponse.json<Project>();
@@ -122,7 +122,7 @@ describe("buildApp project catalog route", () => {
       projects: [{
         ...added,
         workspaces: [
-          { ...main, effectiveConfig: { uploads: { defaultFolder: ".pi-web/uploads" }, attachments: { defaultFolder: ".pi-web/attachments" } }, sessions: [] },
+          { ...main, effectiveConfig: { uploads: { defaultFolder: ".pi-web/uploads" }, attachments: { defaultFolder: ".pi-web/attachments" } } },
           {
             id: "secondary",
             projectId: added.id,
@@ -130,20 +130,31 @@ describe("buildApp project catalog route", () => {
             label: "secondary",
             isMain: false,
             effectiveConfig: { uploads: { defaultFolder: ".pi-web/uploads" }, attachments: { defaultFolder: ".pi-web/attachments" } },
-            sessions: [sessionPayload(secondaryPath, "s2")],
           },
         ],
       }],
     });
-    // The catalog fans out per workspace; the /api/machines/local alias request runs the same fan-out again.
-    const expectedSessionRequests = [
-      `/sessions?cwd=${encodeURIComponent(projectDir)}`,
-      `/sessions?cwd=${encodeURIComponent(secondaryPath)}`,
-    ];
-    expect(daemon.requestedPaths).toEqual([...expectedSessionRequests, ...expectedSessionRequests]);
+    // The catalog carries workspace metadata only: it must not request session
+    // lists from the session daemon at all. Sessions load per workspace when
+    // the workspace opens.
+    expect(daemon.requestedPaths).toEqual([]);
   });
 
-  it("yields an empty session list for a workspace whose session request fails", async () => {
+  it("serves repeat catalog requests from the cache within the TTL", async () => {
+    const addResponse = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Cached", path: projectDir, create: true } });
+    expect(addResponse.statusCode).toBe(200);
+
+    const first = await app.inject({ method: "GET", url: "/api/machines/local/projects/catalog" });
+    const sessionRequestsAfterFirst = daemon.requestedPaths.length;
+    const second = await app.inject({ method: "GET", url: "/api/machines/local/projects/catalog" });
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toEqual(first.json());
+    expect(daemon.requestedPaths.length).toBe(sessionRequestsAfterFirst);
+  });
+
+  it("does not enumerate sessions even when a session request would fail", async () => {
     const addResponse = await app.inject({ method: "POST", url: "/api/projects", payload: { name: "Broken", path: projectDir, create: true } });
     expect(addResponse.statusCode).toBe(200);
     daemon.scriptedResponses.set(projectDir, new Error("session daemon exploded"));
@@ -151,11 +162,12 @@ describe("buildApp project catalog route", () => {
     const response = await app.inject({ method: "GET", url: "/api/projects/catalog" });
 
     expect(response.statusCode).toBe(200);
-    const catalog = response.json<{ projects: { workspaces: { path: string; sessions: unknown[] }[] }[] }>();
+    const catalog = response.json<{ projects: { workspaces: { path: string }[] }[] }>();
     expect(catalog.projects).toHaveLength(1);
     expect(catalog.projects[0]?.workspaces).toEqual([
-      expect.objectContaining({ path: projectDir, sessions: [] }),
+      expect.objectContaining({ path: projectDir }),
     ]);
+    expect(daemon.requestedPaths).toEqual([]);
   });
 
   it("does not let /projects/catalog shadow the per-project workspaces route", async () => {

@@ -1653,6 +1653,10 @@ class RejectingSessionManager implements PiSessionManagerGateway {
     /* no memo to drop in this fake */
   }
 
+  warmSessionSummariesInDir() {
+    return Promise.resolve(0);
+  }
+
   open(): never {
     this.calls.open += 1;
     throw new Error("Session manager should not open sessions for invalid prompt payloads");

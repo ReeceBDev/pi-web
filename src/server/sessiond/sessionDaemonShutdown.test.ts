@@ -21,6 +21,8 @@ describe("session daemon shutdown", () => {
           stop: () => { events.push("plugins"); throw failure; },
         },
         catalogRefresher: { dispose: () => { events.push("catalog"); } },
+        workspaceWarmer: { dispose: () => { events.push("warmer"); } },
+        browserReaper: { dispose: () => { events.push("reaper"); } },
         auth: { dispose: () => { events.push("auth"); } },
         sessions: { dispose: () => { events.push("sessions"); } },
         unreadStore: { flush: () => { events.push("unread"); } },
@@ -31,7 +33,7 @@ describe("session daemon shutdown", () => {
       },
     });
 
-    expect(events).toEqual(["quiesce", "plugin-lifetimes", "catalog", "removals", "backends", "providers", "plugins", "sessions", "server", "auth", "unread"]);
+    expect(events).toEqual(["quiesce", "plugin-lifetimes", "catalog", "warmer", "reaper", "removals", "backends", "providers", "plugins", "sessions", "server", "auth", "unread"]);
     expect(onFailure).toHaveBeenCalledOnce();
     expect(logger.error).toHaveBeenCalledWith(
       { err: failure, operation: "stop server plugins" },
@@ -91,6 +93,8 @@ describe("session daemon shutdown", () => {
           stop: async () => { await instance.dispose?.(AbortSignal.timeout(1_000)); },
         },
         catalogRefresher: { dispose: () => undefined },
+        workspaceWarmer: { dispose: () => undefined },
+        browserReaper: { dispose: () => undefined },
         auth: { dispose: () => undefined },
         sessions: { dispose: () => undefined },
         unreadStore: { flush: () => undefined },

@@ -28,7 +28,12 @@ export interface SpeechChunker {
 }
 
 export function createSpeechChunker(options: SpeechChunkerOptions): SpeechChunker {
-  const maxChunkBytes = Math.round((options.maxChunkSeconds ?? 15) * options.sampleRate) * 2;
+  // ponytail: 7s max chunks halve worst-case post-send transcription wait
+  // (send blocks until the tail chunk transcribes; 15s chunks meant up to ~7s
+  // wait on this box's RTFx ≈ 2.16). Same total CPU — chunks are just split
+  // points; no audio is dropped at boundaries. Raise back if per-chunk
+  // overhead ever shows in the transcripts.
+  const maxChunkBytes = Math.round((options.maxChunkSeconds ?? 7) * options.sampleRate) * 2;
   const silenceFrameCount = Math.round((options.silenceSeconds ?? 0.7) / FRAME_SECONDS);
   const silenceRms = options.silenceRms ?? 0.006;
   const frameSamples = Math.max(1, Math.round(options.sampleRate * FRAME_SECONDS));

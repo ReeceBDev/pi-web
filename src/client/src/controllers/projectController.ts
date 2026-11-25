@@ -47,10 +47,13 @@ export class ProjectController {
       const catalog = await this.api.catalog(machineId);
       if (selectedMachineId(this.getState()) !== machineId) return;
       const workspacesByProjectId = Object.fromEntries(catalog.projects.map((project) => [project.id, project.workspaces]));
-      const sessionsByWorkspacePath = Object.fromEntries(
-        catalog.projects.flatMap((project) => project.workspaces.map((workspace) => [workspace.path, workspace.sessions] as const)),
-      );
-      this.setState({ projects: catalog.projects, workspacesByProjectId, sessionsByWorkspacePath });
+      // The catalog carries workspace metadata only — never session lists.
+      // A workspace's sessions load when the workspace opens (a fresh listing
+      // written into sessionsByWorkspacePath), and sessions created while a
+      // list is loaded arrive through session.created events. Leaving existing
+      // per-workspace caches alone keeps loaded lists alive across a
+      // projects refresh instead of resetting them to nothing.
+      this.setState({ projects: catalog.projects, workspacesByProjectId });
     } catch {
       // Older remote gateways have no catalog route; the per-project waterfall remains the source of truth there.
       await this.loadProjectsWithoutCatalog(machineId);

@@ -1,14 +1,17 @@
 import { LitElement, css, html, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { PipelineApprovalBinding, PipelineRevisionFeedback } from "../../../shared/pipelineApproval";
-import type { PendingPipelineDecision } from "../cachedPipelineRuns";
+import { resolveAppUrl } from "../appUrl";
+import type { PendingPipelineDecision, PipelineApprovalBinding, PipelineRevisionFeedback } from "../../../shared/pipelineApproval";
 import type { PipelineDecisionCard, PipelineDeliveryView } from "./shared";
 
 export type PipelineDecideCallback = (decision: "approve" | "revise", runId: string, binding: PipelineApprovalBinding | undefined, feedback?: PipelineRevisionFeedback) => void | Promise<void>;
 
 /**
  * The pipeline run's live decision card in the run's chat: current phase, the
- * open question's artifact, and Approve/Revise buttons. The buttons call back
+ * open question's artifact, and Approve/Revise buttons. The artifact bytes are
+ * fetched from /api/pipeline-runs/artifact/<sha256> (the byte proxy of the
+ * pipeline's content-addressed store) when the card renders; transcript-
+ * restored rows may instead carry the bytes inline. The buttons call back
  * into the session controller, which posts the decision — typing "approve" is
  * never required to drive a run.
  */
@@ -26,17 +29,33 @@ export class PipelineCard extends LitElement {
 
   @state() private submitting: "approve" | "revise" | undefined;
   @state() private error = "";
+  @state() private artifact: { sha256: string; status: "loading" | "ready" | "unavailable"; text?: string } | undefined;
 
   @state() private editingRevision = false;
   @state() private reason = "";
   @state() private acceptanceRef = "";
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-    if (changed.has("card") && JSON.stringify(changed.get("card")?.binding) !== JSON.stringify(this.card?.binding)) {
-      this.error = "";
-      this.editingRevision = false;
-      this.reason = "";
-      this.acceptanceRef = "";
+    if (changed.has("card")) {
+      // A status refresh of the SAME question must not wipe a draft revision
+      // reason; only a genuinely different question (new id, revision, or
+      // binding) starts a fresh draft.
+      const previous = changed.get("card");
+      const current = this.card;
+      // undefined-safe: a first card (previous undefined) never counts as the
+      // same question.
+      const sameQuestion = previous?.questionId === current?.questionId
+        && previous?.revision === current?.revision
+        && JSON.stringify(previous?.binding) === JSON.stringify(current?.binding);
+      if (!sameQuestion) {
+        this.error = "";
+        this.editingRevision = false;
+        this.reason = "";
+        this.acceptanceRef = "";
+      }
+      const sha256 = this.card?.artifactSha256;
+      if (sha256 === undefined || this.card?.artifact !== undefined) this.artifact = undefined;
+      else if (this.artifact?.sha256 !== sha256) void this.fetchArtifact(sha256);
     }
   }
 
@@ -68,19 +87,26 @@ export class PipelineCard extends LitElement {
       @click=${() => void this.decide(pending.decision, pending.binding, pending.feedback)}>Retry decision confirmation</button>`;
   }
 
+  /** Approve/Revise wait for the artifact bytes: a decision is recorded only
+   * for a question whose content the reviewer could actually read. Cards
+   * without an artifact (and transcript rows with inline bytes) are ready. */
+  private artifactReady(card: PipelineDecisionCard): boolean {
+    if (card.artifact !== undefined) return true;
+    if (card.artifactSha256 === undefined) return true;
+    return this.artifact?.sha256 === card.artifactSha256 && this.artifact.status === "ready" && this.artifact.text !== undefined;
+  }
+
   private renderBody(): TemplateResult {
     const card = this.card;
-    if (card === undefined) return this.closeStatus !== undefined || this.detail !== undefined ? html`` : html`<p class="idle">Waiting for the next pipeline action</p>`;
+    if (card === undefined) return this.closeStatus !== undefined || this.detail !== undefined ? html`` : html`<p class="idle">No decision card open · the next one posts here</p>`;
     const disabled = card.historical === true || card.decided === true || card.decisionPending === true || this.submitting !== undefined || this.stale ||
-      this.retry !== undefined || card.artifact === undefined;
+      this.retry !== undefined || !this.artifactReady(card);
     return html`
       <div class="question">
         <span class="q-label">${card.stage ?? "decision"} · ${card.questionId}</span>
         <span class="q-rev">rev ${String(card.revision)}</span>
       </div>
-      ${card.artifact === undefined
-        ? html`<p class="artifact-missing">artifact ${card.artifactSha256.slice(0, 12)}… (content unavailable)</p>`
-        : html`<details class="artifact"><summary>artifact</summary><pre>${card.artifact}</pre></details>`}
+      ${this.renderArtifact(card)}
       ${(card.reviewNotes ?? "") !== "" ? html`<details class="artifact" ?open=${card.stage === "modules"}><summary>${card.stage === "modules" ? "Revision review" : "Requirement and example IDs"}</summary><pre>${card.reviewNotes}</pre></details>` : null}
       ${card.decided === true || card.historical === true
         ? html`<p class="decided" role="status">${card.decided === true ? "Decided · recorded" : "Previous request"}</p>`
@@ -100,6 +126,38 @@ export class PipelineCard extends LitElement {
         `}
       ${this.error === "" ? null : html`<p class="error" role="alert">${this.error}</p>`}
     `;
+  }
+
+  private renderArtifact(card: PipelineDecisionCard): TemplateResult {
+    if (card.artifact !== undefined) return html`<details class="artifact"><summary>artifact</summary><pre>${card.artifact}</pre></details>`;
+    if (card.artifactSha256 === undefined) return html``;
+    const artifact = this.artifact;
+    if (artifact === undefined || artifact.status === "loading") return html`<p class="artifact-missing">loading artifact…</p>`;
+    if (artifact.status === "unavailable" || artifact.text === undefined) {
+      return html`<p class="artifact-missing">artifact ${card.artifactSha256.slice(0, 12)}… (content unavailable)</p>`;
+    }
+    return html`<details class="artifact"><summary>artifact</summary><pre>${artifact.text}</pre></details>`;
+  }
+
+  /** Fetch the card's artifact bytes from the byte proxy route; only the
+   * fetch for the currently rendered sha256 may land. */
+  private async fetchArtifact(sha256: string): Promise<void> {
+    this.artifact = { sha256, status: "loading" };
+    try {
+      const response = await fetch(resolveAppUrl(`api/pipeline-runs/artifact/${encodeURIComponent(sha256)}`));
+      if (!response.ok) throw new Error(`artifact fetch failed · ${String(response.status)}`);
+      this.applyArtifact(sha256, { sha256, status: "ready", text: await response.text() });
+    } catch {
+      this.applyArtifact(sha256, { sha256, status: "unavailable" });
+    }
+  }
+
+  /** Land a fetch result only when the card still shows this sha256 (a newer
+   * card, or one without an artifact, replaces the in-flight request). */
+  private applyArtifact(sha256: string, next: { sha256: string; status: "ready" | "unavailable"; text?: string }): void {
+    const current = this.artifact;
+    if (current?.sha256 !== sha256) return;
+    this.artifact = next;
   }
 
   private async decide(decision: "approve" | "revise", binding?: PipelineApprovalBinding, feedback?: PipelineRevisionFeedback): Promise<void> {

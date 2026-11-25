@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,16 +14,16 @@ const binding = {
   questionId: "sketch-approval", revision: 1, artifactSha256: "a".repeat(64),
 };
 
-/** Stub start-run CLI: records argv + goal-file content, then succeeds or
- * fails depending on STUB_MODE (the child inherits this process's env). */
+/** Stub start-run CLI: records argv + goal text (piped on stdin per the
+ * --goal-stdin contract), then succeeds or fails depending on STUB_MODE (the
+ * child inherits this process's env). */
 async function writeStubScript(dir: string): Promise<string> {
   const stub = join(dir, "start-run-stub.mjs");
   await writeFile(stub, [
     "import { readFileSync, writeFileSync } from 'node:fs';",
     "const argvFile = process.env.STUB_ARGV_OUT;",
     "const argv = process.argv.slice(2);",
-    "const goalFileIndex = argv.indexOf('--goal-file');",
-    "const goal = goalFileIndex >= 0 ? readFileSync(argv[goalFileIndex + 1], 'utf8') : '';",
+    "const goal = argv.includes('--goal-stdin') ? readFileSync(0, 'utf8') : '';",
     "writeFileSync(argvFile, JSON.stringify({ argv, goal }));",
     "if (process.env.STUB_MODE === 'fail') {",
     "  console.log(JSON.stringify({ ok: false, reason: 'temporal_unreachable', detail: 'connect ECONNREFUSED 127.0.0.1:7233' }));",
@@ -66,7 +67,7 @@ describe("buildApp pipeline run route", () => {
     if (argvOut === undefined) throw new Error("stub argv output path not configured");
     const recorded: unknown = JSON.parse(await readFile(argvOut, "utf8"));
     expect(recorded).toMatchObject({
-      argv: ["--request-id", "d17e801d-4fe0-4fe3-860b-23805fa78819", "--repo", workDir, "--goal-file", expect.stringMatching(/goal\.txt$/), "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
+      argv: ["--request-id", "d17e801d-4fe0-4fe3-860b-23805fa78819", "--repo", workDir, "--goal-stdin", "--sketch", join(workDir, "sketch.png"), "--actor", "rbowen"],
       goal: "Ship the flinger fix",
     });
   });
@@ -285,5 +286,134 @@ describe("buildApp pipeline status/decision routes", () => {
       if (previousDecide === undefined) delete process.env["PI_WEB_PIPELINE_DECIDE"];
       else process.env["PI_WEB_PIPELINE_DECIDE"] = previousDecide;
     }
+  });
+});
+
+/** Fake pipeline worker for the SSE/artifact proxy routes: an HTTP server on
+ * an ephemeral loopback port whose behavior each test sets via the handle
+ * function. Requests are recorded for assertions. */
+describe("buildApp pipeline event/artifact proxy routes", () => {
+  let upstream: Server | undefined;
+  let upstreamRequests: string[];
+  let upstreamHeaders: Record<string, string | string[] | undefined>;
+  let previousEventsUrl: string | undefined;
+
+  async function startUpstream(handle: (request: { url: string | undefined; headers: Record<string, string | string[] | undefined> }, response: { setHeader: (name: string, value: string) => void; write: (chunk: string) => void; end: (chunk?: string) => void; statusCode: number }) => void): Promise<string> {
+    upstreamRequests = [];
+    upstreamHeaders = {};
+    const server = createServer((request, response) => {
+      upstreamRequests.push(request.url ?? "");
+      upstreamHeaders = request.headers;
+      handle({ url: request.url, headers: request.headers }, response);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    upstream = server;
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("upstream address missing");
+    return `http://127.0.0.1:${String(address.port)}`;
+  }
+
+  beforeEach(() => {
+    previousEventsUrl = process.env["PI_PIPELINE_EVENTS_URL"];
+  });
+
+  afterEach(async () => {
+    if (previousEventsUrl === undefined) delete process.env["PI_PIPELINE_EVENTS_URL"];
+    else process.env["PI_PIPELINE_EVENTS_URL"] = previousEventsUrl;
+    await new Promise<void>((resolve, reject) => {
+      if (upstream === undefined) { resolve(); return; }
+      upstream.close((error) => {
+        if (error === undefined) resolve();
+        else reject(error);
+      });
+    });
+    upstream = undefined;
+  });
+
+  it("proxies /events frames verbatim with the SSE content type", async () => {
+    process.env["PI_PIPELINE_EVENTS_URL"] = await startUpstream((_request, response) => {
+      response.setHeader("content-type", "text/event-stream");
+      response.write("id: 1\nevent: transition\ndata: {\"seq\":1}\n\n");
+      response.write("id: 2\nevent: card\ndata: {\"seq\":2}\n\n");
+      response.end();
+    });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: "/api/pipeline-runs/events" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.body).toBe("id: 1\nevent: transition\ndata: {\"seq\":1}\n\nid: 2\nevent: card\ndata: {\"seq\":2}\n\n");
+    expect(upstreamRequests).toEqual(["/events"]);
+  });
+
+  it("forwards the ?from= query and the Last-Event-ID header to the worker", async () => {
+    process.env["PI_PIPELINE_EVENTS_URL"] = await startUpstream((_request, response) => {
+      response.setHeader("content-type", "text/event-stream");
+      response.end();
+    });
+
+    await appTestContext.app.inject({ method: "GET", url: "/api/pipeline-runs/events?from=7", headers: { "last-event-id": "7" } });
+
+    expect(upstreamRequests).toEqual(["/events?from=7"]);
+    expect(upstreamHeaders["last-event-id"]).toBe("7");
+  });
+
+  it("ends the SSE response when the pipeline worker is unreachable", async () => {
+    // Port 1 on loopback is never listening: fetch fails fast with ECONNREFUSED.
+    process.env["PI_PIPELINE_EVENTS_URL"] = "http://127.0.0.1:1";
+
+    const response = await appTestContext.app.inject({ method: "GET", url: "/api/pipeline-runs/events" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.body).toBe("");
+  });
+
+  it("proxies artifact bytes with the upstream status and content type", async () => {
+    const sha = "ab".repeat(32);
+    process.env["PI_PIPELINE_EVENTS_URL"] = await startUpstream((_request, response) => {
+      response.setHeader("content-type", "text/plain");
+      response.end("artifact bytes");
+    });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/pipeline-runs/artifact/${sha}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/plain");
+    expect(response.body).toBe("artifact bytes");
+    expect(upstreamRequests).toEqual([`/artifact/${sha}`]);
+  });
+
+  it("passes an upstream artifact miss (404) through", async () => {
+    const sha = "cd".repeat(32);
+    process.env["PI_PIPELINE_EVENTS_URL"] = await startUpstream((_request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.statusCode = 404;
+      response.end("{\"ok\":false,\"reason\":\"not_found\"}");
+    });
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/pipeline-runs/artifact/${sha}` });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toBe("{\"ok\":false,\"reason\":\"not_found\"}");
+  });
+
+  it("rejects a non-hex sha256 with 400 without contacting the worker", async () => {
+    process.env["PI_PIPELINE_EVENTS_URL"] = "http://127.0.0.1:1";
+
+    const response = await appTestContext.app.inject({ method: "GET", url: "/api/pipeline-runs/artifact/not-hex" });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ ok: false, reason: "invalid_input" });
+  });
+
+  it("reports the worker as unreachable when the artifact proxy cannot connect", async () => {
+    const sha = "ef".repeat(32);
+    process.env["PI_PIPELINE_EVENTS_URL"] = "http://127.0.0.1:1";
+
+    const response = await appTestContext.app.inject({ method: "GET", url: `/api/pipeline-runs/artifact/${sha}` });
+
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toMatchObject({ ok: false, reason: "pipeline_unreachable" });
   });
 });

@@ -23,8 +23,8 @@ import type { PiSessionListEntry } from "./piSessionService.js";
  * - `messageCount` can transiently include a final write read mid-flight: a
  *   message-shaped line that ends with `}` counts even though its JSON is
  *   never validated, where the SDK fails to parse such a torn line. The count
- *   self-heals on the next listing once the line completes (the file is
- *   re-scanned whole as soon as its size changes).
+ *   self-heals once the line completes (the tail is re-folded from before the
+ *   incomplete line as soon as the file's size changes).
  *
  * Files whose header is missing, unreadable, or not a session header are
  * skipped, like the SDK does. Results are sorted by `modified` descending.
@@ -67,6 +67,8 @@ const SCAN_CHUNK_BYTES = 4 * 1024 * 1024;
 /** Types longer than this fall back to a full parse instead of byte classification. */
 const MAX_CLASSIFIED_TYPE_LENGTH = 64;
 
+export type SessionScanMode = "full" | "tail" | "memo";
+
 /** Construction options for {@link SessionSummaryScanner}. */
 export interface SessionSummaryScannerOptions {
   /**
@@ -75,6 +77,14 @@ export interface SessionSummaryScannerOptions {
    * callers leave it unset.
    */
   readonly chunkBytes?: number;
+
+  /**
+   * Observability hook reporting how each file was read: "full" (whole file),
+   * "tail" (only the bytes appended since the previous scan), or "memo"
+   * (stat-only fast path, no bytes read). Tests use it to pin which path a
+   * listing took; production callers may leave it unset.
+   */
+  readonly onScan?: (filePath: string, mode: SessionScanMode) => void;
 }
 
 /**
@@ -88,11 +98,18 @@ export interface SessionSummaryScannerOptions {
  *
  * - Key: absolute file path. Trusted value: file identity (dev/ino) plus the
  *   size the cached summary was folded from.
- * - Identity and size unchanged → cached summary. The mtime is re-read from
- *   the same stat, so `modified` stays faithful even on a cache hit.
- * - Identity or size changed → the cached summary is dropped and the file is
- *   scanned whole again. Nothing is folded incrementally, so a warm listing
- *   is always the fold of exactly the bytes it read.
+ * - Identity and size unchanged → cached summary plus the stored unterminated
+ *   tail (one stat each, no bytes read).
+ * - Identity unchanged, file grown → the appended bytes are folded from the
+ *   offset where the previous scan's last complete line ended; bytes before
+ *   that offset are never read again.
+ * - Identity changed or file shrunk → the cached summary is dropped and the
+ *   file is scanned whole again.
+ * - The fold stored in the memo never includes the unterminated trailing
+ *   line; its bytes are stored alongside so every listing — including the
+ *   stat-only fast path — folds them in for display only. A line still being
+ *   written therefore counts (by the `}` heuristic) while it is torn and is
+ *   counted exactly once more when the writer completes it, never twice.
  * - File gone (ENOENT) → its entry is dropped; entries for files that no
  *   longer appear in the directory listing are pruned on each scan.
  * - {@link clear} drops every entry. There are no TTLs and nothing is
@@ -109,6 +126,7 @@ export interface SessionSummaryScannerOptions {
 export class SessionSummaryScanner {
   private readonly memo = new Map<string, MemoizedSessionSummary>();
   private readonly chunkBytes: number;
+  private readonly onScan: ((filePath: string, mode: SessionScanMode) => void) | undefined;
 
   constructor(options: SessionSummaryScannerOptions = {}) {
     const chunkBytes = options.chunkBytes ?? SCAN_CHUNK_BYTES;
@@ -116,6 +134,7 @@ export class SessionSummaryScanner {
       throw new TypeError(`SessionSummaryScanner options.chunkBytes must be a positive integer, got ${String(chunkBytes)}`);
     }
     this.chunkBytes = chunkBytes;
+    this.onScan = options.onScan;
   }
 
   /** Drop every cached summary, forcing full re-parses on the next listing. */
@@ -169,24 +188,86 @@ export class SessionSummaryScanner {
       return undefined;
     }
 
-    if (stats.dev !== memoized.dev || stats.ino !== memoized.ino || stats.size !== memoized.size) {
-      // Anything but an unchanged file is scanned whole again.
+    if (stats.dev !== memoized.dev || stats.ino !== memoized.ino) {
+      // A replacement at the same path is a different file: scan it whole.
       return this.fullScan(filePath, chunkBuffer);
     }
-    // Stat-only fast path: unchanged file, so no open and no read. Its one
-    // blind spot is an equal-size in-place rewrite that keeps the inode;
-    // identity + size cannot see it by design (see the class docs).
-    return buildSummaryFromFold(memoized.fold, filePath, stats.mtime);
+    if (stats.size === memoized.size) {
+      // Stat-only fast path: unchanged file, so no open and no read. The one
+      // blind spot is an equal-size in-place rewrite that keeps the inode;
+      // identity + size cannot see it by design (see the class docs).
+      this.onScan?.(filePath, "memo");
+      return buildSummaryFromFold(foldWithTail(memoized.fold, memoized.tail), filePath, stats.mtime);
+    }
+    if (memoized.fold.rejected || stats.size < memoized.size) {
+      // Rejection is final — a still-rejected file can only be skipped again,
+      // and a shrink needs a whole scan to say what remains.
+      return this.fullScan(filePath, chunkBuffer);
+    }
+    this.onScan?.(filePath, "tail");
+    return this.tailScan(filePath, memoized, chunkBuffer);
   }
 
   private async fullScan(filePath: string, chunkBuffer: () => Buffer): Promise<PiSessionListEntry | undefined> {
-    const scanned = await scanWholeSessionFile(filePath, chunkBuffer);
-    if (scanned === undefined) {
+    this.onScan?.(filePath, "full");
+    const opened = await openSessionFile(filePath);
+    if (opened === undefined) {
       this.memo.delete(filePath);
       return undefined;
     }
-    this.memo.set(filePath, { dev: scanned.dev, ino: scanned.ino, size: scanned.size, fold: scanned.fold });
-    return buildSummaryFromFold(scanned.fold, filePath, scanned.mtime);
+    const { file, stats } = opened;
+    try {
+      const fold = createEmptyFold();
+      const outcome = await foldCompleteLines(file, fold, 0, undefined, chunkBuffer());
+      // Rejection is final — the first parseable line decides it — so the fold
+      // stops early and the observed file size, not the read offset, is what a
+      // later listing must compare against to take the stat-only fast path.
+      const memoized: MemoizedSessionSummary = {
+        dev: stats.dev,
+        ino: stats.ino,
+        size: fold.rejected ? Math.max(stats.size, outcome.endOffset) : outcome.endOffset,
+        tailOffset: outcome.tailOffset,
+        tail: outcome.tail,
+        fold,
+      };
+      this.memo.set(filePath, memoized);
+      return buildSummaryFromFold(foldWithTail(fold, memoized.tail), filePath, stats.mtime);
+    } catch {
+      return undefined;
+    } finally {
+      await file.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Fold only the bytes appended since the memoized scan: read from the offset
+   * where the previous scan's last complete line ended, folding complete lines
+   * into the memo's fold and keeping any new unterminated tail for display.
+   * The handle is opened here so the identity re-check sees whichever file the
+   * path names now — a concurrent replacement is not an append and falls back
+   * to a whole scan.
+   */
+  private async tailScan(filePath: string, memoized: MemoizedSessionSummary, chunkBuffer: () => Buffer): Promise<PiSessionListEntry | undefined> {
+    const opened = await openSessionFile(filePath);
+    if (opened === undefined) {
+      this.memo.delete(filePath);
+      return undefined;
+    }
+    const { file, stats } = opened;
+    try {
+      if (stats.dev !== memoized.dev || stats.ino !== memoized.ino || stats.size <= memoized.size) {
+        return await this.fullScan(filePath, chunkBuffer);
+      }
+      const outcome = await foldCompleteLines(file, memoized.fold, memoized.tailOffset, memoized.tail, chunkBuffer());
+      memoized.size = outcome.endOffset;
+      memoized.tailOffset = outcome.tailOffset;
+      memoized.tail = outcome.tail;
+      return buildSummaryFromFold(foldWithTail(memoized.fold, memoized.tail), filePath, stats.mtime);
+    } catch {
+      return undefined;
+    } finally {
+      await file.close().catch(() => undefined);
+    }
   }
 }
 
@@ -196,7 +277,11 @@ interface MemoizedSessionSummary {
   ino: number;
   /** Observed end-of-file offset when the fold below was completed. */
   size: number;
-  /** Summary state for the whole file, including any unterminated trailing line. */
+  /** Offset where the unterminated trailing line begins; every byte before it is folded into `fold`. */
+  tailOffset: number;
+  /** Bytes of the unterminated trailing line, if any; folded for display only, never into `fold`. */
+  tail: Buffer | undefined;
+  /** Summary state for the file's complete lines only. */
   fold: SummaryFoldState;
 }
 
@@ -211,17 +296,6 @@ interface SummaryFoldState {
 
 function createEmptyFold(): SummaryFoldState {
   return { header: undefined, rejected: false, messageCount: 0, firstMessageText: undefined, name: undefined };
-}
-
-/** One scanned session file: what it was read as, and what folding it produced. */
-interface ScannedSessionFile {
-  dev: number;
-  ino: number;
-  /** Observed end-of-file offset after the read. */
-  size: number;
-  mtime: Date;
-  /** Summary state for the whole file, including any unterminated trailing line. */
-  fold: SummaryFoldState;
 }
 
 /** Open a session file for reading and fstat the opened handle. */
@@ -242,63 +316,37 @@ async function openSessionFile(filePath: string): Promise<{ file: FileHandle; st
 }
 
 /**
- * Open `filePath`, fold its entire contents, and report the identity and
- * metadata of the handle it actually read — never of the pathname, so a
- * concurrent replacement is described by whichever file was opened rather
- * than by a stat that may already be stale.
+ * Fold every complete line of an open session file into `fold`, reading from
+ * `startOffset` with `pendingTail` (the previous scan's unterminated trailing
+ * line, if any) prepended to the first line. Lines are folded only up to their
+ * terminating newline; bytes after the last newline are returned as the new
+ * unterminated tail and never folded into `fold` — callers fold them for
+ * display via {@link foldWithTail}, so a line torn mid-write is counted
+ * transiently and, once completed, counted exactly once as a complete line.
  *
- * Returns undefined when the file cannot be read (unreadable, or it vanished
- * mid-scan): one corrupt file must not break the listing, and the SDK skips
- * such files too.
+ * Returns the observed end-of-file offset, the offset the new tail starts at,
+ * the tail itself, and whether folding stopped early on a rejected file.
  */
-async function scanWholeSessionFile(filePath: string, chunkBuffer: () => Buffer): Promise<ScannedSessionFile | undefined> {
-  const opened = await openSessionFile(filePath);
-  if (opened === undefined) return undefined;
-  const { file, stats } = opened;
-  try {
-    const fold = createEmptyFold();
-    const endOffset = await foldFileLines(file, fold, chunkBuffer());
-    // Rejection is final — the first parseable line decides it — so the fold
-    // stops early and the observed file size, not the read offset, is what a
-    // later listing must compare against to take the stat-only fast path.
-    const size = fold.rejected ? Math.max(stats.size, endOffset) : endOffset;
-    return { dev: stats.dev, ino: stats.ino, size, mtime: stats.mtime, fold };
-  } catch {
-    return undefined;
-  } finally {
-    await file.close().catch(() => undefined);
-  }
+interface FoldOutcome {
+  endOffset: number;
+  tailOffset: number;
+  tail: Buffer | undefined;
+  rejected: boolean;
 }
 
-/**
- * Fold every line of an open session file into `fold`, returning the observed
- * end-of-file offset. The caller owns the handle and keeps it open for the
- * whole fold, so the fold always reads the file it was opened on, even if the
- * path is replaced concurrently.
- */
-async function foldFileLines(file: FileHandle, fold: SummaryFoldState, chunkBuffer: Buffer): Promise<number> {
-  let position = 0;
-  let pendingChunks: Buffer[] = [];
+async function foldCompleteLines(file: FileHandle, fold: SummaryFoldState, startOffset: number, pendingTail: Buffer | undefined, chunkBuffer: Buffer): Promise<FoldOutcome> {
+  let position = startOffset;
+  let pendingChunks: Buffer[] = pendingTail === undefined ? [] : [pendingTail];
   for (;;) {
     const { bytesRead } = await file.read(chunkBuffer, 0, chunkBuffer.length, position);
-    if (bytesRead === 0) {
-      // Final line without a trailing newline (foreign writers, or a line
-      // still being written when we read): fold it into this listing's
-      // result. Once bytes follow it the file's size differs from the
-      // memoized one, so the whole file is folded again and no line is ever
-      // counted twice.
-      if (pendingChunks.length > 0) {
-        const whole = Buffer.concat(pendingChunks);
-        processLineBytes(whole, 0, whole.length, fold);
-      }
-      return position;
-    }
+    if (bytesRead === 0) break;
     const data = chunkBuffer.subarray(0, bytesRead);
     let lineStart = 0;
     let newlineAt = data.indexOf(NEWLINE);
     while (newlineAt !== -1) {
       if (pendingChunks.length > 0) {
-        // A line longer than one chunk: join the saved pieces and finish it.
+        // A line longer than one chunk (or straddling the previous scan's
+        // tail): join the saved pieces and finish it.
         pendingChunks.push(Buffer.from(data.subarray(lineStart, newlineAt)));
         const whole = Buffer.concat(pendingChunks);
         pendingChunks = [];
@@ -306,13 +354,28 @@ async function foldFileLines(file: FileHandle, fold: SummaryFoldState, chunkBuff
       } else {
         processLineBytes(data, lineStart, newlineAt, fold);
       }
-      if (fold.rejected) return position + bytesRead;
+      if (fold.rejected) return { endOffset: position + bytesRead, tailOffset: position + bytesRead, tail: undefined, rejected: true };
       lineStart = newlineAt + 1;
       newlineAt = data.indexOf(NEWLINE, lineStart);
     }
     if (lineStart < bytesRead) pendingChunks.push(Buffer.from(data.subarray(lineStart)));
     position += bytesRead;
   }
+  const tail = pendingChunks.length === 0 ? undefined : Buffer.concat(pendingChunks);
+  return { endOffset: position, tailOffset: position - (tail?.length ?? 0), tail, rejected: false };
+}
+
+/**
+ * A listing's summary state: the memoized fold of the complete lines plus the
+ * unterminated trailing line folded in for display. The memo's fold itself is
+ * never mutated, so the transient torn-line semantics stay decoupled from what
+ * the next scan resumes from.
+ */
+function foldWithTail(fold: SummaryFoldState, tail: Buffer | undefined): SummaryFoldState {
+  if (tail === undefined) return fold;
+  const display = { ...fold };
+  processLineBytes(tail, 0, tail.length, display);
+  return display;
 }
 
 /** The listing entry for a fold, or undefined when the file is not a usable session. */

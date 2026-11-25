@@ -1,26 +1,38 @@
-import { PassThrough } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { PipelineStatusStreams } from "./pipelineStatusStreams.js";
+import type { IncomingHttpHeaders } from "node:http";
 import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { isPipelineExecutionId, readPipelineApproval, readPipelineFeedback, type PipelineRevisionFeedback, type PipelineApprovalBinding } from "../../shared/pipelineApproval.js";
 import type { PipelineChatStore } from "../storage/pipelineChatStore.js";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 
 /**
- * Machine-local route for launching an owner-approved pipeline run ("+ New
- * Work" first send). The browser talks to this web/API process only; the
- * handler spawns the pipeline start-run CLI — the same local trust domain as
- * the unit supervisor — so the browser never needs a route to the pipeline
+ * Machine-local routes for launching an owner-approved pipeline run ("+ New
+ * Work" first send) and proxying the pipeline worker's aggregated event
+ * stream and artifact bytes. The browser talks to this web/API process only;
+ * the handler spawns the pipeline start-run CLI — the same local trust domain
+ * as the unit supervisor — so the browser never needs a route to the pipeline
  * CLI, Temporal, or the artifact store.
  *
  * Wire contract (pipeline/docs/ALIGNMENT-CONTRACT.md, "The wire"):
- * node <script> --request-id <UUID> --repo <abs repo> --goal-file <tmpfile> [--sketch <abs path>]... --actor rbowen
+ * node <script> --request-id <UUID> --repo <abs repo> --goal-stdin [--sketch <abs path>]... --actor rbowen
+ * The goal text rides on the child's stdin (exactly one of --goal-stdin / --goal-file;
+ * pi-web always pipes it, so no tmp goal file ever exists).
  * stdout's last line is one JSON object: {ok:true, projectRunId} (exit 0) or
  * {ok:false, reason, detail} (exit nonzero).
+ *
+ * Live events (GET /api/pipeline-runs/events) is a Server-Sent Events proxy to
+ * the pipeline worker's /events (base URL from PI_PIPELINE_EVENTS_URL, default
+ * http://127.0.0.1:5109). Frames are "id: <seq>\nevent: <kind>\ndata: <json>\n\n"
+ * with kinds "transition" and "card"; the client's ?from= query and
+ * Last-Event-ID header are forwarded, and the worker replays events with a
+ * greater seq in order. Artifacts (GET /api/pipeline-runs/artifact/:sha256)
+ * is a byte proxy to the worker's /artifact/:sha256, whose content-addressed
+ * store verifies the digest before serving.
  */
 
 const projectDir = process.env["PI_PROJECT_DIR"];
@@ -30,6 +42,30 @@ export const DEFAULT_PIPELINE_STATUS_SCRIPT = join(scriptsDir, "run-status.js");
 export const DEFAULT_PIPELINE_DECIDE_SCRIPT = join(scriptsDir, "approve-run.js");
 const PIPELINE_ACTOR = "rbowen";
 const RUN_ID_RE = /^[A-Za-z0-9._:-]+$/;
+const SHA256_RE = /^[0-9a-f]{64}$/;
+
+/** Base URL of the pipeline worker's HTTP surface (env
+ * PI_PIPELINE_EVENTS_URL), without a trailing slash. */
+function pipelineEventsBaseUrl(): string {
+  return (process.env["PI_PIPELINE_EVENTS_URL"] ?? "http://127.0.0.1:5109").replace(/\/+$/, "");
+}
+
+/** Resume support: forward the browser's Last-Event-ID header to the pipeline
+ * worker, which replays the events after it. */
+function lastEventIdHeader(headers: IncomingHttpHeaders): Record<string, string> {
+  const lastEventId = headers["last-event-id"];
+  return typeof lastEventId === "string" && lastEventId !== "" ? { "last-event-id": lastEventId } : {};
+}
+
+/** Pipe the pipeline worker's response body into the Fastify reply verbatim,
+ * with the upstream content-type (or the fallback for an empty response).
+ * Returns the reply: the route handler must resolve with it, because a handler
+ * that resolves undefined after a stream send truncates the body. */
+function sendPipelineUpstreamBody(reply: FastifyReply, upstream: Response, fallbackContentType: string): FastifyReply {
+  reply.header("content-type", upstream.headers.get("content-type") ?? fallbackContentType);
+  if (upstream.body === null) return reply.send();
+  return reply.send(Readable.from(upstream.body));
+}
 
 export interface PipelineRunRequest {
   requestId: string;
@@ -166,7 +202,7 @@ async function collectOwnedCli(child: ChildProcess, timeoutMs: number): Promise<
   return { code, parsed: parseLastJsonLine(stdoutText), stdoutText, stderrText };
 }
 
-type SpawnLike = (command: string, args: string[]) => ChildProcess;
+type SpawnLike = (command: string, args: string[], stdin?: string) => ChildProcess;
 
 interface CollectedCliOutput { code: number | null; parsed: Record<string, unknown> | undefined; stdoutText: string; stderrText: string }
 
@@ -176,26 +212,28 @@ export class ChildPipelineRunClient implements PipelineRunDelegate {
 
   constructor(options: { scriptPath?: string; spawnImpl?: SpawnLike } = {}) {
     this.scriptPath = options.scriptPath ?? process.env["PI_WEB_PIPELINE_START_RUN"] ?? DEFAULT_PIPELINE_START_RUN_SCRIPT;
-    this.spawnImpl = options.spawnImpl ?? ((command, args) => spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }));
+    // stdin is piped only when the caller passes text for the child (start-run
+    // reads its goal from stdin); stdout/stderr always capture the JSON lines.
+    this.spawnImpl = options.spawnImpl ?? ((command, args, stdin) => {
+      const child = spawn(command, args, { stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+      if (stdin !== undefined) child.stdin?.end(stdin, "utf8");
+      return child;
+    });
   }
 
   async run(request: PipelineRunRequest): Promise<PipelineRunResult> {
-    const goalDir = await mkdtemp(join(tmpdir(), "pi-web-pipeline-goal-"));
-    const goalFile = join(goalDir, "goal.txt");
-    try {
-      await writeFile(goalFile, request.goal, "utf8");
-      const args = [
-        this.scriptPath,
-        "--request-id", request.requestId,
-        "--repo", request.repoPath,
-        "--goal-file", goalFile,
-        ...(request.sketches ?? []).flatMap((sketch) => ["--sketch", sketch]),
-        "--actor", PIPELINE_ACTOR,
-      ];
-      return await this.collect(this.spawnImpl(process.execPath, args));
-    } finally {
-      await rm(goalDir, { recursive: true, force: true });
-    }
+    const args = [
+      this.scriptPath,
+      "--request-id", request.requestId,
+      "--repo", request.repoPath,
+      // The goal text rides on stdin (--goal-stdin, supported by the pinned
+      // worker-cli release): no temp goal file is ever written, so there is no
+      // goal-dir relay to clean up.
+      "--goal-stdin",
+      ...(request.sketches ?? []).flatMap((sketch) => ["--sketch", sketch]),
+      "--actor", PIPELINE_ACTOR,
+    ];
+    return await this.collect(this.spawnImpl(process.execPath, args, request.goal));
   }
 
   private async collect(child: ChildProcess): Promise<PipelineRunResult> {
@@ -244,6 +282,47 @@ export function registerPipelineRoutes(
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
     }
+  });
+
+  // Server-Sent Events proxy: the browser opens one EventSource here for all
+  // runs; frames carry the projectRunId in their payloads.
+  app.get<{ Querystring: { from?: string } }>("/api/pipeline-runs/events", async (request, reply) => {
+    const from = request.query.from;
+    const query = typeof from === "string" && from !== "" ? `?from=${encodeURIComponent(from)}` : "";
+    const abort = new AbortController();
+    // When the browser goes away before the stream ends, the upstream request
+    // must follow; left alone, fetch would keep the pipeline worker streaming
+    // to a dead socket. (request.raw "close" fires as soon as the body-less
+    // GET is fully received, so it cannot signal a gone browser.)
+    reply.raw.on("close", () => {
+      if (!reply.raw.writableEnded) abort.abort();
+    });
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${pipelineEventsBaseUrl()}/events${query}`, { headers: lastEventIdHeader(request.headers), signal: abort.signal });
+    } catch (error) {
+      // Pipeline worker unreachable: end the stream (200, empty body) so the
+      // browser's EventSource schedules its own retry.
+      request.log.warn({ error }, "pipeline events upstream unreachable");
+      reply.header("content-type", "text/event-stream");
+      return reply.send();
+    }
+    reply.code(upstream.status);
+    return sendPipelineUpstreamBody(reply, upstream, "text/event-stream");
+  });
+
+  app.get<{ Params: { sha256: string } }>("/api/pipeline-runs/artifact/:sha256", async (request, reply) => {
+    const { sha256 } = request.params;
+    if (!SHA256_RE.test(sha256)) return reply.code(400).send({ ok: false, reason: "invalid_input", detail: "sha256 must be 64 hex characters" });
+    let upstream: Response;
+    try {
+      upstream = await fetch(`${pipelineEventsBaseUrl()}/artifact/${sha256}`);
+    } catch (error) {
+      request.log.warn({ error }, "pipeline artifact upstream unreachable");
+      return reply.code(502).send({ ok: false, reason: "pipeline_unreachable", detail: error instanceof Error ? error.message : String(error) });
+    }
+    reply.code(upstream.status);
+    return sendPipelineUpstreamBody(reply, upstream, "application/octet-stream");
   });
 
   if (history) {

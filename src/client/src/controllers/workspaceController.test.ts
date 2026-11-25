@@ -4,8 +4,7 @@ import { initialAppState } from "../appState";
 import type { Machine, Project, SessionInfo, Workspace } from "../api";
 import { browserErrorScopeKey, projectBrowserErrorScope, workspaceBrowserErrorScope } from "../browserErrors";
 import type { SessionController } from "./sessionController";
-import { rememberPipelineRun, setPipelineRunStorageOverrideForTests } from "../cachedPipelineRuns";
-import { createMemoryStorage } from "../cachedNewSessions";
+import { serverPipelineRows } from "../pipelineRunCatalog";
 import type { NavigationFreshness, NavigationScope } from "./types";
 import { WorkspaceController, type WorkspaceControllerDependencies } from "./workspaceController";
 
@@ -114,7 +113,6 @@ function harness(
 
 afterEach(() => {
   vi.useRealTimers();
-  setPipelineRunStorageOverrideForTests(undefined);
 });
 
 describe("WorkspaceController route selection freshness", () => {
@@ -825,6 +823,61 @@ describe("WorkspaceController catalog caches", () => {
     expect(test.state().sessionsByWorkspacePath).toEqual({ [main.path]: [remote] });
   });
 
+  it("refetches when the cached session list lacks the requested session", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const cached = session(main.path, "cached-1");
+    const createdElsewhere = session(main.path, "remote-1");
+    const loadSessions = vi.fn().mockResolvedValue([cached, createdElsewhere]);
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        sessionsByWorkspacePath: { [main.path]: [cached] },
+      },
+      vi.fn().mockResolvedValue([main]),
+      { loadSessions },
+    );
+    vi.mocked(test.sessions.preferredSession).mockImplementation(
+      (_path, sessions, targetSessionId) => sessions.find((candidate) => candidate.id === targetSessionId) ?? undefined,
+    );
+
+    const result = await test.controller.selectWorkspace(main, { sessionId: createdElsewhere.id });
+
+    expect(result).toBeUndefined();
+    expect(loadSessions).toHaveBeenCalledWith(main.path, "local");
+    expect(test.sessions.selectSession).toHaveBeenCalledWith(createdElsewhere, expect.anything());
+    expect(test.state().sessions).toEqual([cached, createdElsewhere]);
+    expect(test.state().sessionsByWorkspacePath).toEqual({ [main.path]: [cached, createdElsewhere] });
+  });
+
+  it("keeps using the cached session list when it already contains the requested session", async () => {
+    const repo = project("p1", "/repo");
+    const main = workspace(repo.id, repo.path, { isMain: true });
+    const cached = session(main.path, "cached-1");
+    const loadSessions = vi.fn();
+    const test = harness(
+      {
+        selectedMachine: machine("local"),
+        projects: [repo],
+        selectedProject: repo,
+        sessionsByWorkspacePath: { [main.path]: [cached] },
+      },
+      vi.fn().mockResolvedValue([main]),
+      { loadSessions },
+    );
+    vi.mocked(test.sessions.preferredSession).mockImplementation(
+      (_path, sessions, targetSessionId) => sessions.find((candidate) => candidate.id === targetSessionId) ?? undefined,
+    );
+
+    const result = await test.controller.selectWorkspace(main, { sessionId: cached.id });
+
+    expect(result).toBeUndefined();
+    expect(loadSessions).not.toHaveBeenCalled();
+    expect(test.sessions.selectSession).toHaveBeenCalledWith(cached, expect.anything());
+  });
+
   it("drops the closed project's cached workspaces and session lists", () => {
     const closed = project("p1", "/closed");
     const remaining = project("p2", "/remaining");
@@ -845,15 +898,13 @@ describe("WorkspaceController catalog caches", () => {
     expect(test.state().sessionsByWorkspacePath).toEqual({ [remaining.path]: [] });
   });
 
-  it("restores cached pipeline run rows on workspace selection, including boot route restore", async () => {
+  it("restores server-catalog pipeline run rows on workspace selection, including boot route restore", async () => {
     const ws = workspace("p1", "/repo");
-    const storage = createMemoryStorage();
-    setPipelineRunStorageOverrideForTests(storage);
-    rememberPipelineRun({ runId: "run-77", cwd: ws.path, goal: "Build the flinger", created: "now", machineId: "local" }, storage);
+    const catalogRows = serverPipelineRows([{ runId: "run-77", requestId: "d17e801d-4fe0-4fe3-860b-23805fa78819", cwd: ws.path, created: "now", goal: "Build the flinger" }], ws.path);
     const test = harness(
       { selectedMachine: machine("local"), projects: [project("p1", "/repo")] },
       vi.fn().mockResolvedValue([ws]),
-      { loadSessions: vi.fn().mockResolvedValue([]) },
+      { loadSessions: vi.fn().mockResolvedValue(catalogRows) },
     );
 
     await test.controller.selectProject({ id: "p1", name: "p1", path: "/repo", createdAt: "now" });

@@ -21,10 +21,12 @@ import { registerLocalHtmlFileRoutes } from "./localHtmlFileRoutes.js";
 import { registerProjectTrustRoutes } from "./projectTrustRoutes.js";
 import { registerWorkspaceDeletionRoutes } from "./workspaces/workspaceDeletionRoutes.js";
 import { createFilePiWebConfigService, registerConfigRoutes, registerLocalMachineConfigRoutes, type PiWebConfigService } from "./configRoutes.js";
+import { registerClientDiagnosticsRoutes } from "./clientDiagnosticsRoutes.js";
 import { PiWebPluginManifestRuntimeError, PiWebPluginService } from "./piWebPluginService.js";
 import { createActiveProfilePiPackageService, type PiPackageService } from "./piPackageService.js";
 import { registerPiPackageRoutes } from "./piPackageRoutes.js";
-import { createPiWebStatusCache, type PiWebStatusCache } from "./piWebStatusCache.js";
+import { createPiWebStatusCache, createTtlCache, type PiWebStatusCache } from "./piWebStatusCache.js";
+import { registerScrollProbe } from "./scrollProbe.js";
 import { detectPiWebInstallation, getPiWebRuntime, getPiWebStatus, getPiWebVersionStatus } from "./piWebStatus.js";
 import { createDeploymentFlavorResolver } from "./deploymentIdentity.js";
 import { registerDeploymentIdentityAssetRoutes } from "./deploymentIdentityRoutes.js";
@@ -68,6 +70,7 @@ export interface AppDependencies {
   piWebStatusCache?: PiWebStatusCache;
   config?: PiWebConfigService;
   clientDist?: string | false;
+  scrollProbeLogFile?: string;
   /** Overrides deployment-flavor detection (dev/stable asset identity) in tests. */
   deploymentFlavor?: () => Promise<PiWebDeploymentFlavor>;
   logger?: FastifyServerOptions["logger"];
@@ -100,16 +103,22 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
     }
   });
 
-  // One-request bulk listing: every project, its workspaces, and each
-  // workspace's sessions. A workspace whose session list fails contributes an
-  // empty list so one dead workspace cannot blank the whole catalog.
+  // One-request listing: every project and its workspaces. The catalog carries
+  // no session lists: a per-workspace session fan-out here re-scanned every
+  // session file in every workspace and took seconds at scale (~166
+  // workspaces), which timed out fresh client boots. Sessions load per
+  // workspace when the workspace opens (GET /sessions?cwd=...), and a created
+  // session reaches open clients through the global session.created event.
+  const catalogCache = createTtlCache(async () => {
+    const all = await projects.list();
+    return { projects: await Promise.all(all.map(async (project) => ({
+      ...project,
+      workspaces: await catalogWorkspaces(project, workspaces, options.config),
+    }))) };
+  }, { onError: (error) => { app.log.warn({ err: error }, "failed to refresh project catalog cache"); } });
   app.get(`${prefix}/projects/catalog`, async (_request, reply) => {
     try {
-      const all = await projects.list();
-      return { projects: await Promise.all(all.map(async (project) => ({
-        ...project,
-        workspaces: await catalogWorkspaces(options.sessionDaemon, project, workspaces, options.config),
-      }))) };
+      return await catalogCache.get();
     } catch (error) {
       return sendWorkspaceRequestError(reply, error, 404);
     }
@@ -117,28 +126,12 @@ function registerLocalProjectRoutes(app: FastifyInstance, projects: ProjectServi
 }
 
 async function catalogWorkspaces(
-  sessionDaemon: SessionProxyDaemon | undefined,
   project: Project,
   workspaces: WorkspaceCatalog,
   config?: Pick<PiWebConfigService, "read">,
 ) {
   const resolution = await resolveWorkspacesWithEffectiveConfig(project, workspaces, config);
-  return Promise.all(resolution.workspaces.map(async (workspace) => ({
-    ...workspace,
-    sessions: await workspaceSessions(sessionDaemon, workspace.path),
-  })));
-}
-
-async function workspaceSessions(sessionDaemon: SessionProxyDaemon | undefined, workspacePath: string): Promise<unknown[]> {
-  if (sessionDaemon === undefined) return [];
-  try {
-    const upstream = await sessionDaemon.request("GET", `/sessions?cwd=${encodeURIComponent(workspacePath)}`);
-    if (upstream.statusCode < 200 || upstream.statusCode >= 300) return [];
-    const sessions: unknown = JSON.parse(upstream.body);
-    return Array.isArray(sessions) ? Array.from<unknown>(sessions) : [];
-  } catch {
-    return [];
-  }
+  return resolution.workspaces;
 }
 
 async function resolveWorkspacesWithEffectiveConfig(
@@ -283,6 +276,7 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
   const invalidatingConfigService = invalidatePiWebStatusOnWrite(configService, piWebStatusCache);
   registerConfigRoutes(app, invalidatingConfigService);
   registerLocalMachineConfigRoutes(app, invalidatingConfigService);
+  registerClientDiagnosticsRoutes(app);
 
   registerMachineRoutes(app, machines);
   registerMachinePluginProxyRoutes(app, machines);
@@ -339,6 +333,11 @@ export async function buildApp(deps: AppDependencies = {}): Promise<FastifyInsta
       (error) => { app.log.warn({ err: error }, "failed to detect PI WEB deployment flavor"); },
     );
     registerDeploymentIdentityAssetRoutes(app, { clientDist, flavor: deploymentFlavor });
+    // TEMPORARY scroll diagnosis (2026-11-10): injects the scroll/touch probe
+    // into the app shell and collects it at /__probe while the Android
+    // launcher scroll bug is open. ponytail: remove when the scroll ticket
+    // closes.
+    registerScrollProbe(app, deps.scrollProbeLogFile);
     app.setNotFoundHandler((_request, reply) => reply.sendFile("index.html"));
   }
 

@@ -57,6 +57,7 @@ describe("PiSessionService listing of replaced session files", () => {
         invalidateSessionFile: (sessionFile: string) => {
           realGateway.invalidateSessionFile(sessionFile);
         },
+        warmSessionSummariesInDir: (sessionDir: string) => realGateway.warmSessionSummariesInDir(sessionDir),
         open: () => fakeSessionManager(LISTING_CWD, { getSessionId: () => "replacement-id" }),
       },
       heartbeatIntervalMs: 60_000,
@@ -124,6 +125,7 @@ describe("PiSessionService.detachParent summary memo", () => {
           invalidated.push(sessionFile);
           realGateway.invalidateSessionFile(sessionFile);
         },
+        warmSessionSummariesInDir: (sessionDir: string) => realGateway.warmSessionSummariesInDir(sessionDir),
         open: () => fakeSessionManager(LISTING_CWD, { getSessionId: () => "child" }),
       },
       heartbeatIntervalMs: 60_000,
