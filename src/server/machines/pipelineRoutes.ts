@@ -245,7 +245,7 @@ export function registerPipelineRoutes(
     const { runId } = request.params;
     if (!RUN_ID_RE.test(runId)) return reply.code(400).send({ ok: false, reason: "invalid_input" });
     if (!commands.watch) return reply.code(503).send({ ok: false, reason: "pipeline_stream_unavailable" });
-    const output = new PassThrough();
+    const output = new PassThrough({ highWaterMark: 2 * 1024 * 1024 });
     output.write(": connected\n\n");
     const heartbeat = setInterval(() => {
       if (!output.write(": keepalive\n\n")) output.destroy();

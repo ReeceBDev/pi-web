@@ -34,7 +34,7 @@ export class PipelineStatusStreams {
       };
       if (child.stdout !== null) {
         createInterface({ input: child.stdout, crlfDelay: Infinity }).on("line", (line: string) => {
-          if (this.active.get(runId) !== created || line.length > 128 * 1024) return;
+          if (this.active.get(runId) !== created || line.length > 2 * 1024 * 1024) return;
           let data: unknown;
           try { data = JSON.parse(line); } catch { return; }
           if (!isRecord(data)) return;
