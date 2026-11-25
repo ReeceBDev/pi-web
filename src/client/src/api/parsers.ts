@@ -2147,6 +2147,25 @@ export function parsePipelineRunAck(value: unknown): PipelineRunAck {
   };
 }
 
+export interface PipelineRunListEntry {
+  runId: string;
+  goal: string;
+  cwd: string;
+  created: string;
+}
+
+export function parsePipelineRunList(value: unknown): PipelineRunListEntry[] {
+  const runs = isRecord(value) ? value["runs"] : undefined;
+  if (!Array.isArray(runs)) return [];
+  return runs.flatMap((entry: unknown) => {
+    if (!isRecord(entry)) return [];
+    const { runId, goal, cwd, created } = entry;
+    return typeof runId === "string" && typeof goal === "string" && typeof cwd === "string" && typeof created === "string"
+      ? [{ runId, goal, cwd, created }]
+      : [];
+  });
+}
+
 export type PipelineRunStatus = { ok: true; view: Record<string, unknown> } | { ok: false; reason: string; detail: string };
 
 export function parsePipelineRunStatus(value: unknown): PipelineRunStatus {

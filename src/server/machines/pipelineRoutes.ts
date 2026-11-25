@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { PassThrough } from "node:stream";
 import { PipelineStatusStreams } from "./pipelineStatusStreams.js";
@@ -47,6 +47,7 @@ export type PipelineDecisionResult = { ok: true; receipt: Record<string, unknown
 
 export interface PipelineStatusDelegate {
   status(runId: string): Promise<PipelineStatusResult>;
+  list?(repoPath: string): Promise<{ ok: boolean; runs?: unknown[] }>;
   watch?(runId: string, listener: { view: (view: Record<string, unknown>) => void; end: () => void }): () => void;
 }
 
@@ -68,6 +69,13 @@ export class ChildPipelineCommandClient implements PipelineStatusDelegate, Pipel
     this.statusScript = options.statusScript ?? process.env["PI_WEB_PIPELINE_STATUS"] ?? DEFAULT_PIPELINE_STATUS_SCRIPT;
     this.decideScript = options.decideScript ?? process.env["PI_WEB_PIPELINE_DECIDE"] ?? DEFAULT_PIPELINE_DECIDE_SCRIPT;
     this.spawnImpl = options.spawnImpl ?? ((command, args) => spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }));
+  }
+
+  async list(repoPath: string): Promise<{ ok: boolean; runs?: unknown[] }> {
+    const script = join(dirname(this.statusScript), "list-runs.js");
+    const collected = await this.collectCli(this.spawnCli(script, ["--repo", repoPath, "--limit", "30"]), 15000);
+    const runs = collected.parsed?.["runs"];
+    return collected.code === 0 && Array.isArray(runs) ? { ok: true, runs } : { ok: false };
   }
 
   watch(runId: string, listener: Parameters<PipelineStatusStreams["subscribe"]>[1]): () => void {
@@ -207,6 +215,19 @@ export function registerPipelineRoutes(
       return await reply.code(200).send(await runner.run({ ...body, sketches }));
     } catch (error) {
       return reply.code(200).send({ ok: false, reason: "cli_spawn_failed", detail: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/pipeline-runs", async (request, reply) => {
+    const repoPath = isRecord(request.query) ? request.query["repoPath"] : undefined;
+    if (typeof repoPath !== "string" || !isAbsolute(repoPath) || !existsSync(repoPath)) {
+      return await reply.code(400).send({ ok: false, runs: [] });
+    }
+    if (!commands.list) return await reply.code(503).send({ ok: false, runs: [] });
+    try {
+      return await reply.send(await commands.list(repoPath));
+    } catch {
+      return await reply.code(503).send({ ok: false, runs: [] });
     }
   });
 

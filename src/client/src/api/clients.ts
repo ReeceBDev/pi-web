@@ -28,6 +28,7 @@ import {
   parseMoveWorkspaceFileResponse,
   parseOAuthFlowState,
   parsePipelineRunAck,
+  parsePipelineRunList,
   parsePipelineRunDecision,
   parsePipelineRunStatus,
   parsePiPackageMutationResponse,
@@ -395,6 +396,7 @@ export const supervisorApi = {
 } as const;
 
 export const pipelineApi = {
+  pipelineRuns: (repoPath: string) => request("api/pipeline-runs?" + new URLSearchParams({ repoPath }).toString(), parsePipelineRunList),
   /** Launch a pipeline run on a repo workspace (machine-local only). */
   pipelineRun: (repoPath: string, goal: string, requestId?: string) => request("api/pipeline-runs", parsePipelineRunAck, { method: "POST", body: JSON.stringify({ repoPath, goal, requestId }) }),
   pipelineRunEvents: (runId: string, onStatus: (result: ReturnType<typeof parsePipelineRunStatus>) => void, onDisconnect: () => void) => {
