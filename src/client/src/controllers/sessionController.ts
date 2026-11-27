@@ -193,7 +193,14 @@ interface PipelineCardMemory {
 interface SuppressedCreatedSession {
   session: SessionInfo;
   machineId: string;
+  parkedAt: number;
 }
+
+// A created-announcement is parked only to dedupe the window while its
+// create request is in flight — a window that lasts seconds. A park older
+// than this is stale (its create settled or its pending start leaked) and
+// must stop stripping the session from workspace listings.
+const SUPPRESSED_CREATED_TTL_MS = 60_000;
 
 interface SelectedSessionRefreshBuffer {
   target: SelectedSessionRefreshTarget;
@@ -1443,8 +1450,16 @@ export class SessionController {
       // and then discarding the fetched list would lose not-yet-persisted
       // sessions once the stale catalog snapshot is reused without a refetch.
       if (selectedMachineId(this.getState()) !== machineId || this.getState().selectedWorkspace?.id !== workspace.id) return;
+      // A parked created-announcement can outlive the create that justified it
+      // (a duplicate announcement may land after that create resolved). The
+      // parked entry is stripped from every refresh below, so stripping the
+      // SELECTED session here is the vanish: selection yanked from the open
+      // composer while the user watches. Keep the selected session visible;
+      // genuine server-side deletes still move selection, because they omit
+      // the session from fetchedSessions entirely.
+      const selectedSessionId = this.getState().selectedSession?.id;
       const listedSessions = mergeCachedNewSessions(workspace.path, fetchedSessions, machineId)
-        .filter((session) => !this.isSuppressedCreatedSession(session, machineId));
+        .filter((session) => !this.isSuppressedCreatedSession(session, machineId) || session.id === selectedSessionId);
       const sessions = this.mergePendingStartSessions(workspace.path, listedSessions, machineId);
       this.registerRestoredPipelineStarts(sessions, workspace, machineId);
       const selectedSession = this.getState().selectedSession;
@@ -2434,12 +2449,23 @@ export class SessionController {
   }
 
   private hasPendingStartFor(cwd: string, machineId: string): boolean {
-    return Array.from(this.pendingSessionStarts.values()).some((pending) => pending.cwd === cwd && pending.machineId === machineId);
+    // A discarded start is dead: its row was deleted and its create result is
+    // awaited only for cleanup. It must not hold this workspace's created-
+    // announcement park open — that gate keeps parked sessions out of every
+    // refresh, so a leaked discarded entry here strips open chats from the
+    // list for the rest of the page session.
+    return Array.from(this.pendingSessionStarts.values()).some((pending) => pending.cwd === cwd && pending.machineId === machineId && !pending.discarded);
   }
 
   private isSuppressedCreatedSession(session: SessionInfo, machineId: string): boolean {
     const suppressed = this.suppressedCreatedSessions.get(session.id);
-    return suppressed?.session.cwd === session.cwd && suppressed.machineId === machineId;
+    if (suppressed === undefined) return false;
+    if (suppressed.session.cwd !== session.cwd || suppressed.machineId !== machineId) return false;
+    if (Date.now() - suppressed.parkedAt > SUPPRESSED_CREATED_TTL_MS) {
+      this.suppressedCreatedSessions.delete(session.id);
+      return false;
+    }
+    return true;
   }
 
   private takeSuppressedCreatedSessionsFor(cwd: string, machineId: string, resolvedSessionId?: string): SessionInfo[] {
@@ -2551,7 +2577,7 @@ export class SessionController {
     const isCurrentWorkspace = state.selectedWorkspace?.path === session.cwd;
     if (isCurrentWorkspace && this.hasPendingStartFor(session.cwd, machineId)) {
       vanishDiag("created-suppressed", { sessionId: session.id, cwd: session.cwd, machineId });
-      this.suppressedCreatedSessions.set(session.id, { session, machineId });
+      this.suppressedCreatedSessions.set(session.id, { session, machineId, parkedAt: Date.now() });
       return;
     }
     // The event drives every already-loaded list for this workspace: the open

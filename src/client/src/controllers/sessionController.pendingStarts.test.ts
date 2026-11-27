@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { initialAppState } from "../appState";
 import { browserErrorScopeKey, visibleBrowserErrors, workspaceBrowserErrorScope } from "../browserErrors";
-import { isCachedNewSessionInfo, loadCachedNewSessions } from "../cachedNewSessions";
+import { isCachedNewSessionInfo, loadCachedNewSessions, rememberCachedNewSession } from "../cachedNewSessions";
 import { loadDraft, saveDraft } from "../promptDraftStorage";
 import { loadStagedAttachments, saveStagedAttachments, type PendingAttachment } from "../promptAttachmentStaging";
 import { SessionController } from "./sessionController";
@@ -627,6 +627,148 @@ describe("SessionController pending starts", () => {
     expect(stoppedIds).toEqual([started.id]);
     expect(state.sessions).toEqual([]);
     expect(state.selectedSession).toBeUndefined();
+  });
+
+  it("releases parked created-session broadcasts even when an earlier pending start was discarded", async () => {
+    const startedSession: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
+    const otherClientSession: SessionInfo = { ...oldSession, id: "other-client-session", path: "/tmp/other-client-session.jsonl" };
+    const startRequests: ReturnType<typeof deferred<SessionInfo>>[] = [];
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      startSession: () => {
+        const request = deferred<SessionInfo>();
+        startRequests.push(request);
+        return request.promise;
+      },
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    void controller.startSession();
+    await flushPendingRowPublication();
+    // Discarding the constructing row marks its pending start discarded. Its
+    // create request here never returns, so the entry stays in the map — and
+    // it must stop gating this workspace's announcement park: otherwise every
+    // later park holds until the page dies and open chats get stripped from
+    // every refresh.
+    await controller.deleteCachedNewSession(state.selectedSession);
+
+    const second = controller.startSession();
+    await flushPendingRowPublication();
+    controller.applyGlobalEvent({ type: "session.created", session: otherClientSession });
+    startRequests[1]?.resolve(startedSession);
+    await second;
+
+    const sessionIds = state.sessions.map((session) => session.id);
+    expect(sessionIds.filter((id) => id === otherClientSession.id)).toHaveLength(1);
+    expect(sessionIds.filter((id) => id === startedSession.id)).toHaveLength(1);
+  });
+
+  it("keeps a selected session in the list across refreshes even while a stale announcement park targets it", async () => {
+    const storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
+    const startedSession: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
+    const secondStarted: SessionInfo = { ...oldSession, id: "second-start", path: "/tmp/second-start.jsonl" };
+    const startRequests: ReturnType<typeof deferred<SessionInfo>>[] = [];
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      startSession: () => {
+        const request = deferred<SessionInfo>();
+        startRequests.push(request);
+        return request.promise;
+      },
+      sessions: () => Promise.resolve([oldSession]),
+      messages: () => Promise.resolve(emptyPage),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
+      transcriptSnapshot: (session) => Promise.resolve({ page: emptyPage, status: status(sessionLookupId(session)), seq: 0, partial: null }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    const first = controller.startSession();
+    await flushPendingRowPublication();
+    startRequests[0]?.resolve(startedSession);
+    await first;
+    expect(state.selectedSession?.id).toBe(startedSession.id);
+
+    const second = controller.startSession();
+    await flushPendingRowPublication();
+    // While the second create is in flight the user goes back to the first
+    // chat, and a duplicate created-announcement for it parks. The refresh
+    // must not yank selection away from the chat the user is looking at.
+    await controller.selectSession(startedSession, { updateUrl: false });
+    controller.applyGlobalEvent({ type: "session.created", session: startedSession });
+
+    await controller.refreshCurrentWorkspaceSessions();
+
+    expect(state.selectedSession?.id).toBe(startedSession.id);
+
+    startRequests[1]?.resolve(secondStarted);
+    await second;
+    expect(state.selectedSession?.id).toBe(startedSession.id);
+    expect(state.sessions.map((session) => session.id)).toEqual([secondStarted.id, startedSession.id, oldSession.id]);
+  });
+
+  it("stops stripping a session once its announcement park goes stale", async () => {
+    const storage = new MemoryStorage();
+    Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
+    const startedSession: SessionInfo = { ...oldSession, id: "started-session", path: "/tmp/started-session.jsonl" };
+    const otherClientSession: SessionInfo = { ...oldSession, id: "other-client-session", path: "/tmp/other-client-session.jsonl" };
+    const startRequests: ReturnType<typeof deferred<SessionInfo>>[] = [];
+    let state: AppState = { ...initialAppState(), selectedWorkspace: workspace, sessions: [] };
+    const api: typeof defaultApi = {
+      ...defaultApi,
+      startSession: () => {
+        const request = deferred<SessionInfo>();
+        startRequests.push(request);
+        return request.promise;
+      },
+      sessions: () => Promise.resolve([oldSession]),
+      messages: () => Promise.resolve(emptyPage),
+      status: (session) => Promise.resolve(status(sessionLookupId(session))),
+      transcriptSnapshot: (session) => Promise.resolve({ page: emptyPage, status: status(sessionLookupId(session)), seq: 0, partial: null }),
+    };
+    const controller = new SessionController(
+      () => state,
+      (patch) => { state = { ...state, ...patch }; },
+      () => undefined,
+      undefined,
+      { api, socket: new FakeSocket() },
+    );
+
+    // A broadcast for a session another client created parks while this
+    // workspace has a create in flight. Fresh, it keeps the session out of
+    // the list; stale, it must stop stripping it.
+    rememberCachedNewSession(otherClientSession);
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(realNow);
+    const start = controller.startSession();
+    await flushPendingRowPublication();
+    controller.applyGlobalEvent({ type: "session.created", session: otherClientSession });
+
+    await controller.refreshCurrentWorkspaceSessions();
+    expect(state.sessions.map((session) => session.id)).not.toContain(otherClientSession.id);
+
+    clock.mockReturnValue(realNow + 61_000);
+    await controller.refreshCurrentWorkspaceSessions();
+    expect(state.sessions.map((session) => session.id)).toContain(otherClientSession.id);
+
+    clock.mockRestore();
+    startRequests[0]?.resolve(startedSession);
+    await start;
   });
 });
 
